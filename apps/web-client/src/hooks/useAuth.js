@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { login as apiLogin, register as apiRegister } from '../services/api.js';
-import { connect, disconnect } from '../services/socket.js';
+import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { initializeIdentity } from '../services/cryptoService.js';
 
 /**
@@ -10,7 +10,7 @@ import { initializeIdentity } from '../services/cryptoService.js';
 export function useAuth() {
   const [user, setUser] = useState(() => {
     try {
-      const raw = localStorage.getItem('blink-text-user');
+      const raw = localStorage.getItem('blink-user');
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
@@ -22,12 +22,12 @@ export function useAuth() {
 
   const _postLogin = useCallback(async (data) => {
     const { token, user: u } = data;
-    localStorage.setItem('blink-text-token', token);
-    localStorage.setItem('blink-text-user', JSON.stringify(u));
+    localStorage.setItem('blink-token', token);
+    localStorage.setItem('blink-user', JSON.stringify(u));
     setUser(u);
 
     // Connect socket and initialize crypto identity
-    connect(token);
+    connectSocket(token);
     await initializeIdentity();
   }, []);
 
@@ -68,9 +68,9 @@ export function useAuth() {
   );
 
   const logout = useCallback(() => {
-    localStorage.removeItem('blink-text-token');
-    localStorage.removeItem('blink-text-user');
-    disconnect();
+    localStorage.removeItem('blink-token');
+    localStorage.removeItem('blink-user');
+    disconnectSocket();
     setUser(null);
   }, []);
 
