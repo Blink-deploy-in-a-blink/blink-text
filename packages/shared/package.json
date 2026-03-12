@@ -1,0 +1,9 @@
+{
+  "name": "@blink-text/shared",
+  "version": "1.0.0",
+  "description": "Shared schemas and validation for Blink Text",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  }
+}

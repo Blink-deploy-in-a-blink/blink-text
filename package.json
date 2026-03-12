@@ -1,0 +1,13 @@
+{
+  "name": "blink-text",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:crypto": "npm run build -w packages/crypto",
+    "dev:server": "npm run dev -w apps/server",
+    "dev:client": "npm run dev -w apps/web-client"
+  }
+}

@@ -1,0 +1,116 @@
+'use strict';
+
+require('dotenv').config();
+const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
+const db = require('./db');
+const { validateEncryptedMessage, validateKeyExchange } = require('@blink-text/shared');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+
+/**
+ * Registers all Socket.io event handlers on the given io instance.
+ * @param {import('socket.io').Server} io
+ */
+function registerSocketHandlers(io) {
+  io.use((socket, next) => {
+    const token = socket.handshake.auth && socket.handshake.auth.token;
+    if (!token) return next(new Error('Authentication token required'));
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) return next(new Error('Invalid or expired token'));
+      socket.user = user;
+      next();
+    });
+  });
+
+  io.on('connection', (socket) => {
+    const { id: userId, username } = socket.user;
+    console.log(`[WS] User connected: ${username} (${userId})`);
+    socket.broadcast.emit('user_connected', { userId, username });
+
+    socket.on('join_conversation', ({ conversationId }) => {
+      if (!conversationId || typeof conversationId !== 'string') return;
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+
+      if (!participant) {
+        socket.emit('error', { message: 'Not a participant in this conversation' });
+        return;
+      }
+
+      socket.join(conversationId);
+      console.log(`[WS] ${username} joined room ${conversationId}`);
+    });
+
+    // send_message: validate, persist, relay encrypted message using EncryptedMessage format
+    socket.on('send_message', (msg, ack) => {
+      // Inject senderId from authenticated socket user (never trust client-provided senderId)
+      const payload = { ...msg, senderId: userId };
+
+      const { valid, errors } = validateEncryptedMessage(payload);
+      if (!valid) {
+        if (typeof ack === 'function') ack({ error: errors.join(', ') });
+        return;
+      }
+
+      const { conversationId, payload: encPayload } = payload;
+      const { ciphertext, iv, version } = encPayload;
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+
+      if (!participant) {
+        if (typeof ack === 'function') ack({ error: 'Not a participant in this conversation' });
+        return;
+      }
+
+      try {
+        const messageId = payload.id || uuidv4();
+        const timestamp = Date.now();
+
+        db.prepare(
+          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', timestamp);
+
+        const message = {
+          id: messageId,
+          conversationId,
+          senderId: userId,
+          timestamp,
+          payload: { ciphertext, iv, version: version || 'v1' },
+        };
+
+        io.to(conversationId).emit('message', message);
+        if (typeof ack === 'function') ack({ success: true, message });
+      } catch (err) {
+        console.error('[WS] send_message error:', err);
+        if (typeof ack === 'function') ack({ error: 'Failed to store message' });
+      }
+    });
+
+    socket.on('key_exchange', (payload) => {
+      const normalized = { ...payload, userId };
+      const { valid } = validateKeyExchange(normalized);
+      if (!valid) return;
+
+      const { conversationId } = normalized;
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+
+      if (!participant) return;
+
+      socket.to(conversationId).emit('key_exchange', normalized);
+    });
+
+    socket.on('disconnect', () => {
+      console.log(`[WS] User disconnected: ${username} (${userId})`);
+      socket.broadcast.emit('user_disconnected', { userId, username });
+    });
+  });
+}
+
+module.exports = { registerSocketHandlers };
