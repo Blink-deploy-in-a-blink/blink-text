@@ -53,7 +53,12 @@ export class BrowserProvider implements CryptoProvider {
   }
 
   async deriveConversationKey(sharedSecret: Uint8Array, conversationId: string): Promise<Uint8Array> {
-    const baseKey = await subtle.importKey('raw', sharedSecret as unknown as ArrayBuffer, { name: 'HKDF' }, false, ['deriveKey']);
+    // Copy the shared secret into a clean ArrayBuffer to satisfy strict BufferSource typing.
+    const keyMaterial = sharedSecret.buffer.slice(
+      sharedSecret.byteOffset,
+      sharedSecret.byteOffset + sharedSecret.byteLength
+    ) as ArrayBuffer;
+    const baseKey = await subtle.importKey('raw', keyMaterial, { name: 'HKDF' }, false, ['deriveKey']);
     const salt = new TextEncoder().encode(conversationId);
     const info = new TextEncoder().encode('blink-text-v1');
     const aesKey = await subtle.deriveKey(

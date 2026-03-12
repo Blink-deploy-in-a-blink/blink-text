@@ -101,12 +101,12 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
         )}
 
         <label style={s.label}>
-          {type === 'direct' ? 'Recipient User ID' : 'Participant User IDs (comma-separated)'}
+        {type === 'direct_message' ? 'Recipient Username' : 'Participant Usernames (comma-separated)'}
         </label>
         <input
           style={s.input}
           type="text"
-          placeholder={type === 'direct' ? 'User ID…' : 'user-id-1, user-id-2'}
+          placeholder={type === 'direct_message' ? 'username…' : 'alice, bob, charlie'}
           value={recipientUsername}
           onChange={(e) => setRecipientUsername(e.target.value)}
         />

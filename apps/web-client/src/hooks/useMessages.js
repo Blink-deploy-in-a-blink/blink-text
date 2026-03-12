@@ -39,7 +39,8 @@ export function useMessages(conversationId, myUserId) {
             try {
               const plaintext = await decryptConversationMessage(conversationId, msg.payload);
               return { ...msg, plaintext };
-            } catch {
+            } catch (err) {
+              console.warn('[useMessages] Failed to decrypt message:', msg.id, err);
               return { ...msg, plaintext: '[unable to decrypt]' };
             }
           })
@@ -66,7 +67,8 @@ export function useMessages(conversationId, myUserId) {
         if (isMounted.current) {
           setMessages((prev) => [...prev, { ...msg, plaintext }]);
         }
-      } catch {
+      } catch (err) {
+        console.warn('[useMessages] Failed to decrypt incoming message:', msg.id, err);
         if (isMounted.current) {
           setMessages((prev) => [...prev, { ...msg, plaintext: '[unable to decrypt]' }]);
         }

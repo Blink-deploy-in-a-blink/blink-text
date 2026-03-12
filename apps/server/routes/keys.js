@@ -67,7 +67,9 @@ router.post(
       const device = db.prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?').get(deviceId, req.user.id);
       if (!device) return res.status(400).json({ error: 'Device not found or not owned by user' });
 
-      // Upsert: remove existing entry for this device+conversation
+      // Upsert: remove existing ephemeral key for this device+conversation before inserting a fresh one.
+      // Each device should only have one active ephemeral key per conversation at a time;
+      // replacing it allows key refresh without accumulating stale entries.
       db.prepare('DELETE FROM key_exchange_data WHERE conversation_id = ? AND device_id = ?').run(conversationId, deviceId);
 
       const id = uuidv4();

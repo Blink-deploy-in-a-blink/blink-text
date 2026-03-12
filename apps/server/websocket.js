@@ -46,8 +46,16 @@ function registerSocketHandlers(io) {
 
     // send_message: validate, persist, relay encrypted message using EncryptedMessage format
     socket.on('send_message', (msg, ack) => {
-      // Inject senderId from authenticated socket user (never trust client-provided senderId)
-      const payload = { ...msg, senderId: userId };
+      // Build the validated payload from only the fields we trust.
+      // conversationId, id, timestamp, and payload come from the client;
+      // senderId is always taken from the authenticated socket user.
+      const payload = {
+        id: msg && msg.id,
+        conversationId: msg && msg.conversationId,
+        senderId: userId, // always override — never trust client-provided senderId
+        timestamp: msg && msg.timestamp,
+        payload: msg && msg.payload,
+      };
 
       const { valid, errors } = validateEncryptedMessage(payload);
       if (!valid) {

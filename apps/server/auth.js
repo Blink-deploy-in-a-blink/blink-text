@@ -5,6 +5,13 @@ const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
+if (!process.env.JWT_SECRET) {
+  console.warn(
+    '[auth] WARNING: JWT_SECRET is not set. Using an insecure default. ' +
+    'Set the JWT_SECRET environment variable before deploying.'
+  );
+}
+
 /**
  * Express middleware that verifies a Bearer JWT in the Authorization header.
  * Attaches the decoded payload to req.user on success.
