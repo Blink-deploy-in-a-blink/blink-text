@@ -1,6 +1,8 @@
 export { CryptoEngine } from './engine.js';
 export { BrowserProvider } from './provider/browser.js';
-export { NodeProvider } from './provider/node.js';
+// NodeProvider is NOT re-exported here to avoid pulling node:crypto into
+// browser bundles.  Import it directly:
+//   import { NodeProvider } from '@blink-text/crypto/provider/node';
 export type {
   CryptoProvider,
   EncryptedMessage,

@@ -18,7 +18,7 @@ function MessengerView({ user, logout }) {
   const [showNewModal, setShowNewModal] = useState(false);
   const conversationListRef = useRef(null);
 
-  const { messages, loading: msgLoading, sendMessage } = useMessages(
+  const { messages, loading: msgLoading, sendMessage, deleteMessage } = useMessages(
     activeConversation?.id || null,
     user.id
   );
@@ -49,6 +49,7 @@ function MessengerView({ user, logout }) {
         onSelect={handleSelectConversation}
         onNewConversation={() => setShowNewModal(true)}
         onLogout={logout}
+        currentUser={user}
       />
       <div style={appStyles.main}>
         <ChatWindow
@@ -56,6 +57,7 @@ function MessengerView({ user, logout }) {
           messages={messages}
           myUserId={user.id}
           loading={msgLoading}
+          onDeleteMessage={deleteMessage}
         />
         <MessageInput onSend={handleSend} disabled={!activeConversation} />
       </div>

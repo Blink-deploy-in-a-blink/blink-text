@@ -67,6 +67,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_participants_user ON conversation_participants(user_id);
   CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
   CREATE INDEX IF NOT EXISTS idx_key_exchange_conversation ON key_exchange_data(conversation_id, user_id);
+
+  CREATE TABLE IF NOT EXISTS message_deletions (
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (message_id, user_id)
+  );
 `);
 
 module.exports = db;

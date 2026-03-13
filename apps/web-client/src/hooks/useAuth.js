@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { login as apiLogin, register as apiRegister } from '../services/api.js';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { initializeIdentity } from '../services/cryptoService.js';
@@ -19,6 +19,18 @@ export function useAuth() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Re-initialize socket + crypto when restoring a session from localStorage
+  useEffect(() => {
+    if (!user) return;
+    const token = localStorage.getItem('blink-token');
+    if (token) {
+      connectSocket(token);
+      initializeIdentity().catch((err) =>
+        console.error('Failed to restore crypto identity:', err)
+      );
+    }
+  }, []); // run once on mount
 
   const _postLogin = useCallback(async (data) => {
     const { token, user: u } = data;

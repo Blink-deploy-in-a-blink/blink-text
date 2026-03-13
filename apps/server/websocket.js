@@ -114,6 +114,40 @@ function registerSocketHandlers(io) {
       socket.to(conversationId).emit('key_exchange', normalized);
     });
 
+    socket.on('delete_message', ({ conversationId, messageId, mode }, ack) => {
+      if (!conversationId || !messageId) {
+        if (typeof ack === 'function') ack({ error: 'Missing fields' });
+        return;
+      }
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+      if (!participant) {
+        if (typeof ack === 'function') ack({ error: 'Not a participant' });
+        return;
+      }
+
+      try {
+        if (mode === 'for_everyone') {
+          const message = db.prepare('SELECT sender_id FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, conversationId);
+          if (!message || message.sender_id !== userId) {
+            if (typeof ack === 'function') ack({ error: 'Cannot delete others\' messages for everyone' });
+            return;
+          }
+          db.prepare('DELETE FROM messages WHERE id = ?').run(messageId);
+          // Broadcast to all participants so they remove it in real time
+          io.to(conversationId).emit('message_deleted', { conversationId, messageId, mode: 'for_everyone' });
+        } else {
+          db.prepare('INSERT OR IGNORE INTO message_deletions (message_id, user_id) VALUES (?, ?)').run(messageId, userId);
+        }
+        if (typeof ack === 'function') ack({ success: true });
+      } catch (err) {
+        console.error('[WS] delete_message error:', err);
+        if (typeof ack === 'function') ack({ error: 'Failed to delete message' });
+      }
+    });
+
     socket.on('disconnect', () => {
       console.log(`[WS] User disconnected: ${username} (${userId})`);
       socket.broadcast.emit('user_disconnected', { userId, username });

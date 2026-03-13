@@ -6,7 +6,7 @@ const { body, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
 const rateLimit = require('express-rate-limit');
 const db = require('../db');
-const { signToken } = require('../auth');
+const { signToken, authenticateToken } = require('../auth');
 
 const router = express.Router();
 
@@ -98,6 +98,38 @@ router.post(
       });
     } catch (err) {
       console.error('Login error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// PUT /api/auth/password
+router.put(
+  '/password',
+  authenticateToken,
+  [
+    body('currentPassword').isString().notEmpty().withMessage('Current password is required'),
+    body('newPassword').isString().isLength({ min: 8 }).withMessage('New password must be at least 8 characters'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { currentPassword, newPassword } = req.body;
+
+    try {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const valid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
+
+      const newHash = await bcrypt.hash(newPassword, 12);
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, req.user.id);
+
+      return res.json({ message: 'Password changed successfully' });
+    } catch (err) {
+      console.error('Change password error:', err);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }

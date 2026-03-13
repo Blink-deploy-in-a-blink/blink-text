@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createConversation, getConversations } from '../services/api.js';
+import { createConversation, searchUsers } from '../services/api.js';
 
 const s = {
   overlay: {
@@ -59,13 +59,18 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
         return;
       }
 
-      // Fetch all conversations to find the user ID — or use a dedicated endpoint.
-      // Here we call the server's participants info via a placeholder.
-      // For now, we pass the username as a hint; the server resolves by username.
-      // We'll use createConversation with participants as an array of usernames
-      // by treating the input as a userId (after we add a user search route).
-      // To keep the demo simple, we accept a userId directly.
-      const participants = [recipientUsername.trim()];
+      // Look up the username to get the user ID
+      const users = await searchUsers(recipientUsername.trim());
+      const matchedUser = users.find(
+        (u) => u.username.toLowerCase() === recipientUsername.trim().toLowerCase()
+      );
+      if (!matchedUser) {
+        setError('Username not found');
+        setLoading(false);
+        return;
+      }
+
+      const participants = [matchedUser.id];
       const conv = await createConversation(type, participants, groupName || undefined);
       onCreated(conv);
       onClose();

@@ -134,9 +134,19 @@ export async function initializeIdentity() {
 export async function setupConversationKey(conversationId, myUserId) {
   if (!deviceId) throw new Error('Device not initialized. Call initializeIdentity() first.');
 
-  const ephemeralPair = await engine.generateECDHKey();
+  // Reuse an existing ephemeral key if we already published one for this conversation,
+  // otherwise generate and publish a new one.
+  let ephemeralPair;
+  const storedPrivate = loadFromStorage(`blink-ephemeral-${conversationId}`);
 
-  await storeKeyExchange(conversationId, deviceId, ephemeralPair.publicKey);
+  if (storedPrivate) {
+    // We already published our ephemeral key — reuse the private half.
+    ephemeralPair = { privateKey: storedPrivate };
+  } else {
+    ephemeralPair = await engine.generateECDHKey();
+    await storeKeyExchange(conversationId, deviceId, ephemeralPair.publicKey);
+    saveToStorage(`blink-ephemeral-${conversationId}`, ephemeralPair.privateKey);
+  }
 
   const exchangeData = await getKeyExchange(conversationId);
   const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
@@ -144,8 +154,6 @@ export async function setupConversationKey(conversationId, myUserId) {
   if (peerEntry) {
     await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
   }
-
-  saveToStorage(`blink-ephemeral-${conversationId}`, ephemeralPair.privateKey);
 }
 
 /**

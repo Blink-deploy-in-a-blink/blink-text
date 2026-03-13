@@ -44,3 +44,9 @@ export const getKeyExchange = (conversationId) =>
 
 export const searchUsers = (username) =>
   api.get('/api/users/search', { params: { q: username } }).then((r) => r.data.users);
+
+export const deleteMessage = (conversationId, messageId, mode = 'for_me') =>
+  api.delete(`/api/conversations/${conversationId}/messages/${messageId}`, { params: { mode } }).then((r) => r.data);
+
+export const changePassword = (currentPassword, newPassword) =>
+  api.put('/api/auth/password', { currentPassword, newPassword }).then((r) => r.data);

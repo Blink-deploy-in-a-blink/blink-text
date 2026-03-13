@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { getMessages } from '../services/api.js';
+import { getMessages, deleteMessage as apiDeleteMessage } from '../services/api.js';
 import { getSocket, joinConversation, sendMessage } from '../services/socket.js';
 import {
   setupConversationKey,
@@ -84,9 +84,17 @@ export function useMessages(conversationId, myUserId) {
     socket.on('message', onMessage);
     socket.on('key_exchange', onKeyExchange);
 
+    const onMessageDeleted = ({ messageId }) => {
+      if (isMounted.current) {
+        setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      }
+    };
+    socket.on('message_deleted', onMessageDeleted);
+
     return () => {
       socket.off('message', onMessage);
       socket.off('key_exchange', onKeyExchange);
+      socket.off('message_deleted', onMessageDeleted);
     };
   }, [conversationId]);
 
@@ -100,5 +108,25 @@ export function useMessages(conversationId, myUserId) {
     await sendMessage(id, conversationId, myUserId, payload);
   }, [conversationId, myUserId]);
 
-  return { messages, loading, sendMessage: sendMsg };
+  const deleteMsg = useCallback(async (messageId, mode = 'for_me') => {
+    if (!conversationId) return;
+    // Optimistic removal from local state
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+
+    try {
+      if (mode === 'for_everyone') {
+        // Use socket so other participants get real-time removal
+        const socket = getSocket();
+        if (socket) {
+          socket.emit('delete_message', { conversationId, messageId, mode });
+        }
+      } else {
+        await apiDeleteMessage(conversationId, messageId, mode);
+      }
+    } catch (err) {
+      console.error('Delete message failed:', err);
+    }
+  }, [conversationId]);
+
+  return { messages, loading, sendMessage: sendMsg, deleteMessage: deleteMsg };
 }

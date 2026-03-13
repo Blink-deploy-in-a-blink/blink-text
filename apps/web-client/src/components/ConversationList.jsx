@@ -1,5 +1,5 @@
 import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
-import { getConversations } from '../services/api.js';
+import { getConversations, changePassword } from '../services/api.js';
 
 const s = {
   sidebar: {
@@ -25,16 +25,46 @@ const s = {
   name: { color: '#e0e0e0', fontWeight: 500, fontSize: '0.95rem' },
   sub: { color: '#666', fontSize: '0.75rem', marginTop: '0.2rem' },
   empty: { color: '#555', textAlign: 'center', padding: '2rem 1rem', fontSize: '0.875rem' },
+  footer: {
+    borderTop: '1px solid #222', padding: '0.5rem 0.75rem',
+  },
+  profileBtn: {
+    width: '100%', padding: '0.6rem 0.75rem', border: 'none', borderRadius: '6px',
+    background: 'transparent', color: '#e0e0e0', cursor: 'pointer',
+    fontSize: '0.9rem', fontWeight: 600, textAlign: 'left',
+    display: 'flex', alignItems: 'center', gap: '0.5rem',
+  },
+  profilePanel: {
+    padding: '0.5rem 0.75rem', background: '#1a1a1a', borderRadius: '8px',
+    margin: '0.25rem 0',
+  },
+  profileLabel: { color: '#888', fontSize: '0.75rem', marginBottom: '0.25rem' },
+  profileInput: {
+    width: '100%', padding: '0.45rem 0.6rem', borderRadius: '6px',
+    border: '1px solid #333', background: '#0f0f0f', color: '#fff',
+    fontSize: '0.85rem', marginBottom: '0.5rem', outline: 'none',
+  },
+  profileSaveBtn: {
+    width: '100%', padding: '0.45rem', borderRadius: '6px', border: 'none',
+    background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: '0.8rem',
+    fontWeight: 600, marginBottom: '0.25rem',
+  },
+  profileMsg: { fontSize: '0.75rem', textAlign: 'center', marginBottom: '0.25rem' },
   logoutBtn: {
-    margin: '0.75rem', padding: '0.5rem', border: '1px solid #333', borderRadius: '6px',
+    width: '100%', padding: '0.5rem', border: '1px solid #333', borderRadius: '6px',
     background: 'transparent', color: '#888', cursor: 'pointer', fontSize: '0.85rem',
-    width: 'calc(100% - 1.5rem)',
+    marginTop: '0.25rem',
   },
 };
 
-const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout }, ref) {
+const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser }, ref) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showProfile, setShowProfile] = useState(false);
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [pwMsg, setPwMsg] = useState(null);
+  const [pwLoading, setPwLoading] = useState(false);
 
   const load = async () => {
     try {
@@ -53,13 +83,38 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
 
   useImperativeHandle(ref, () => ({ refresh: load }));
 
+  const username = currentUser?.username || (() => {
+    try {
+      const raw = localStorage.getItem('blink-user');
+      return raw ? JSON.parse(raw).username : 'User';
+    } catch { return 'User'; }
+  })();
+
   const getDisplayName = (conv) => {
     if (conv.name) return conv.name;
-    if (conv.type === 'direct') {
-      const names = (conv.participant_usernames || '').split(',').filter(Boolean);
-      return names.length > 0 ? names.join(', ') : 'Direct';
+    if (conv.type === 'direct_message') {
+      const names = (conv.participant_usernames || '').split(',')
+        .filter((n) => n && n !== username);
+      return names.length > 0 ? names.join(', ') : 'Direct Message';
     }
-    return `Group (${(conv.participant_usernames || '').split(',').length})`;
+    return `Group (${(conv.participant_usernames || '').split(',').filter(Boolean).length})`;
+  };
+
+  const handleChangePassword = async () => {
+    setPwMsg(null);
+    if (!currentPw || !newPw) { setPwMsg({ type: 'error', text: 'Fill in both fields' }); return; }
+    if (newPw.length < 8) { setPwMsg({ type: 'error', text: 'New password must be at least 8 characters' }); return; }
+    setPwLoading(true);
+    try {
+      await changePassword(currentPw, newPw);
+      setPwMsg({ type: 'success', text: 'Password changed!' });
+      setCurrentPw('');
+      setNewPw('');
+    } catch (err) {
+      setPwMsg({ type: 'error', text: err.response?.data?.error || 'Failed to change password' });
+    } finally {
+      setPwLoading(false);
+    }
   };
 
   return (
@@ -80,11 +135,54 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
             onClick={() => onSelect(conv)}
           >
             <div style={s.name}>{getDisplayName(conv)}</div>
-            <div style={s.sub}>{conv.type === 'direct' ? 'Direct' : 'Group'}</div>
+            <div style={s.sub}>{conv.type === 'direct_message' ? 'Direct' : 'Group'}</div>
           </div>
         ))}
       </div>
-      <button style={s.logoutBtn} onClick={onLogout}>Sign Out</button>
+      <div style={s.footer}>
+        <button
+          style={s.profileBtn}
+          onClick={() => setShowProfile(!showProfile)}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#1a1a1a')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span style={{ fontSize: '1.1rem' }}>👤</span>
+          <span>{username}</span>
+          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#666' }}>{showProfile ? '▲' : '▼'}</span>
+        </button>
+
+        {showProfile && (
+          <div style={s.profilePanel}>
+            <div style={s.profileLabel}>Change Password</div>
+            <input
+              style={s.profileInput}
+              type="password"
+              placeholder="Current password"
+              value={currentPw}
+              onChange={(e) => setCurrentPw(e.target.value)}
+              autoComplete="current-password"
+            />
+            <input
+              style={s.profileInput}
+              type="password"
+              placeholder="New password (min 8 chars)"
+              value={newPw}
+              onChange={(e) => setNewPw(e.target.value)}
+              autoComplete="new-password"
+            />
+            {pwMsg && (
+              <p style={{ ...s.profileMsg, color: pwMsg.type === 'error' ? '#f87171' : '#4ade80' }}>
+                {pwMsg.text}
+              </p>
+            )}
+            <button style={s.profileSaveBtn} onClick={handleChangePassword} disabled={pwLoading}>
+              {pwLoading ? 'Saving…' : 'Update Password'}
+            </button>
+          </div>
+        )}
+
+        <button style={s.logoutBtn} onClick={onLogout}>Sign Out</button>
+      </div>
     </aside>
   );
 });

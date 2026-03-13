@@ -104,9 +104,10 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
       SELECT id, conversation_id, sender_id, ciphertext, iv, version, timestamp
       FROM messages
       WHERE conversation_id = ?
+        AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
       ORDER BY timestamp ASC
       LIMIT 200
-    `).all(req.params.id);
+    `).all(req.params.id, req.user.id);
 
     // Return messages in the canonical EncryptedMessage format
     const messages = rows.map((row) => ({
@@ -153,5 +154,51 @@ router.get('/:id/participants', [param('id').isUUID()], (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// DELETE /api/conversations/:id/messages/:messageId?mode=for_me|for_everyone
+router.delete(
+  '/:id/messages/:messageId',
+  [
+    param('id').isUUID(),
+    param('messageId').isUUID(),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const mode = req.query.mode || 'for_me';
+    if (!['for_me', 'for_everyone'].includes(mode)) {
+      return res.status(400).json({ error: 'mode must be for_me or for_everyone' });
+    }
+
+    try {
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, req.user.id);
+      if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
+
+      const message = db.prepare(
+        'SELECT * FROM messages WHERE id = ? AND conversation_id = ?'
+      ).get(req.params.messageId, req.params.id);
+      if (!message) return res.status(404).json({ error: 'Message not found' });
+
+      if (mode === 'for_everyone') {
+        if (message.sender_id !== req.user.id) {
+          return res.status(403).json({ error: 'You can only delete your own messages for everyone' });
+        }
+        db.prepare('DELETE FROM messages WHERE id = ?').run(req.params.messageId);
+      } else {
+        db.prepare(
+          'INSERT OR IGNORE INTO message_deletions (message_id, user_id) VALUES (?, ?)'
+        ).run(req.params.messageId, req.user.id);
+      }
+
+      return res.json({ deleted: true, mode });
+    } catch (err) {
+      console.error('Delete message error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 module.exports = router;
