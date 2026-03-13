@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const SOCKET_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`;
 
 let socket = null;
 
@@ -37,10 +37,10 @@ export function joinConversation(conversationId) {
  * @param {{ ciphertext: string, iv: string, version: string }} payload
  * @returns {Promise<{ success: boolean, message?: object }>}
  */
-export function sendMessage(id, conversationId, senderId, payload) {
+export function sendMessage(id, conversationId, senderId, payload, replyToId = null) {
   return new Promise((resolve, reject) => {
     if (!socket) return reject(new Error('Socket not connected'));
-    const msg = { id, conversationId, senderId, timestamp: Date.now(), payload };
+    const msg = { id, conversationId, senderId, timestamp: Date.now(), payload, replyToId };
     socket.emit('send_message', msg, (ack) => {
       if (ack?.error) reject(new Error(ack.error));
       else resolve(ack);

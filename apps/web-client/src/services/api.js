@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001',
+  baseURL: import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`,
   withCredentials: true,
 });
 
@@ -48,5 +48,11 @@ export const searchUsers = (username) =>
 export const deleteMessage = (conversationId, messageId, mode = 'for_me') =>
   api.delete(`/api/conversations/${conversationId}/messages/${messageId}`, { params: { mode } }).then((r) => r.data);
 
+export const editMessage = (conversationId, messageId, payload) =>
+  api.put(`/api/conversations/${conversationId}/messages/${messageId}`, { payload }).then((r) => r.data);
+
 export const changePassword = (currentPassword, newPassword) =>
   api.put('/api/auth/password', { currentPassword, newPassword }).then((r) => r.data);
+
+export const deleteAccount = (password, deleteConversations = false) =>
+  api.delete('/api/auth/account', { data: { password, deleteConversations } }).then((r) => r.data);

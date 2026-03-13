@@ -7,9 +7,28 @@ import { initializeIdentity } from '../services/cryptoService.js';
  * Auth state hook.
  * Manages the current user, JWT token, and socket connection lifecycle.
  */
+/**
+ * Remove all blink-related data from localStorage (ephemeral keys, device id, etc.)
+ */
+function clearBlinkLocalStorage() {
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('blink-')) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach((k) => localStorage.removeItem(k));
+}
+
 export function useAuth() {
   const [user, setUser] = useState(() => {
     try {
+      // If sessionStorage sentinel is missing, the previous tab was closed → clear session
+      if (!sessionStorage.getItem('blink-session')) {
+        clearBlinkLocalStorage();
+        return null;
+      }
       const raw = localStorage.getItem('blink-user');
       return raw ? JSON.parse(raw) : null;
     } catch {
@@ -19,16 +38,23 @@ export function useAuth() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [ready, setReady] = useState(false);
 
   // Re-initialize socket + crypto when restoring a session from localStorage
   useEffect(() => {
-    if (!user) return;
+    if (!user) { setReady(true); return; }
     const token = localStorage.getItem('blink-token');
     if (token) {
+      sessionStorage.setItem('blink-session', '1'); // keep sentinel alive across refreshes
       connectSocket(token);
-      initializeIdentity().catch((err) =>
-        console.error('Failed to restore crypto identity:', err)
-      );
+      initializeIdentity()
+        .then(() => setReady(true))
+        .catch((err) => {
+          console.error('Failed to restore crypto identity:', err);
+          setReady(true);
+        });
+    } else {
+      setReady(true);
     }
   }, []); // run once on mount
 
@@ -36,6 +62,7 @@ export function useAuth() {
     const { token, user: u } = data;
     localStorage.setItem('blink-token', token);
     localStorage.setItem('blink-user', JSON.stringify(u));
+    sessionStorage.setItem('blink-session', '1'); // sentinel: cleared when tab closes
     setUser(u);
 
     // Connect socket and initialize crypto identity
@@ -80,11 +107,11 @@ export function useAuth() {
   );
 
   const logout = useCallback(() => {
-    localStorage.removeItem('blink-token');
-    localStorage.removeItem('blink-user');
+    clearBlinkLocalStorage();
+    sessionStorage.removeItem('blink-session');
     disconnectSocket();
     setUser(null);
   }, []);
 
-  return { user, loading, error, login, register, logout };
+  return { user, loading, error, login, register, logout, ready };
 }

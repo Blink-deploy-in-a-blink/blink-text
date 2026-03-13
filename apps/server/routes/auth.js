@@ -86,6 +86,10 @@ router.post(
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
+      if (user.deleted_at) {
+        return res.status(401).json({ error: 'This account has been deleted' });
+      }
+
       const valid = await bcrypt.compare(password, user.password_hash);
       if (!valid) {
         return res.status(401).json({ error: 'Invalid credentials' });
@@ -130,6 +134,59 @@ router.put(
       return res.json({ message: 'Password changed successfully' });
     } catch (err) {
       console.error('Change password error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// DELETE /api/auth/account - soft-delete the user's account
+router.delete(
+  '/account',
+  authenticateToken,
+  [
+    body('password').isString().notEmpty().withMessage('Password is required to delete account'),
+    body('deleteConversations').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { password, deleteConversations } = req.body;
+
+    try {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const valid = await bcrypt.compare(password, user.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Incorrect password' });
+
+      const deleteAccount = db.transaction(() => {
+        // Soft-delete: mark user as deleted, scramble credentials so they can't log in
+        db.prepare(
+          'UPDATE users SET deleted_at = unixepoch(), password_hash = ?, username = ? WHERE id = ?'
+        ).run('DELETED', `deleted_${user.id.slice(0, 8)}`, req.user.id);
+
+        // Remove devices and key exchange data
+        db.prepare('DELETE FROM devices WHERE user_id = ?').run(req.user.id);
+        db.prepare('DELETE FROM key_exchange_data WHERE user_id = ?').run(req.user.id);
+
+        if (deleteConversations) {
+          // Remove the user from all conversations; CASCADE will clean up
+          // For DMs where user is removed, the other person keeps the convo
+          db.prepare('DELETE FROM conversation_participants WHERE user_id = ?').run(req.user.id);
+        }
+      });
+      deleteAccount();
+
+      // Notify connected peers via socket
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('user_deleted', { userId: req.user.id });
+      }
+
+      return res.json({ message: 'Account deleted' });
+    } catch (err) {
+      console.error('Delete account error:', err);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }

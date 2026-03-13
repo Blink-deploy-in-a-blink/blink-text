@@ -19,7 +19,7 @@ router.get('/search', [
   try {
     const escaped = req.query.q.replace(/[\\%_]/g, '\\$&');
     const users = db.prepare(
-      `SELECT id, username FROM users WHERE username LIKE ? ESCAPE '\\' AND id != ? LIMIT 20`
+      `SELECT id, username FROM users WHERE username LIKE ? ESCAPE '\\' AND id != ? AND deleted_at IS NULL LIMIT 20`
     ).all(`%${escaped}%`, req.user.id);
 
     return res.json({ users });

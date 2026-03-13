@@ -15,8 +15,9 @@ router.get('/', (req, res) => {
   try {
     const conversations = db.prepare(`
       SELECT c.id, c.type, c.name, c.created_at,
-             GROUP_CONCAT(u.username) AS participant_usernames,
-             GROUP_CONCAT(u.id) AS participant_ids
+             GROUP_CONCAT(CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
+             GROUP_CONCAT(u.id) AS participant_ids,
+             MAX(CASE WHEN u.deleted_at IS NOT NULL AND u.id != ? THEN 1 ELSE 0 END) AS has_deleted_participant
       FROM conversations c
       JOIN conversation_participants cp ON cp.conversation_id = c.id
       JOIN conversation_participants cp2 ON cp2.conversation_id = c.id
@@ -24,7 +25,7 @@ router.get('/', (req, res) => {
       JOIN users u ON u.id = cp.user_id
       GROUP BY c.id
       ORDER BY c.created_at DESC
-    `).all(req.user.id);
+    `).all(req.user.id, req.user.id);
 
     return res.json({ conversations });
   } catch (err) {
@@ -80,6 +81,16 @@ router.post(
       createConversation();
 
       const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
+
+      // Notify other participants in real-time
+      const io = req.app.get('io');
+      if (io) {
+        const otherParticipants = allParticipants.filter((uid) => uid !== req.user.id);
+        for (const uid of otherParticipants) {
+          io.to(uid).emit('new_conversation', { conversation });
+        }
+      }
+
       return res.status(201).json({ conversation });
     } catch (err) {
       console.error('Create conversation error:', err);
@@ -101,7 +112,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
 
     const rows = db.prepare(`
-      SELECT id, conversation_id, sender_id, ciphertext, iv, version, timestamp
+      SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
       FROM messages
       WHERE conversation_id = ?
         AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
@@ -115,6 +126,8 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
       conversationId: row.conversation_id,
       senderId: row.sender_id,
       timestamp: row.timestamp,
+      replyToId: row.reply_to_id || null,
+      edited: !!row.edited,
       payload: {
         ciphertext: row.ciphertext,
         iv: row.iv,
@@ -154,6 +167,45 @@ router.get('/:id/participants', [param('id').isUUID()], (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// PUT /api/conversations/:id/messages/:messageId — edit a message
+router.put(
+  '/:id/messages/:messageId',
+  [
+    param('id').isUUID(),
+    param('messageId').isUUID(),
+    body('payload').isObject().withMessage('payload is required'),
+    body('payload.ciphertext').isString().notEmpty(),
+    body('payload.iv').isString().notEmpty(),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, req.user.id);
+      if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
+
+      const message = db.prepare(
+        'SELECT * FROM messages WHERE id = ? AND conversation_id = ?'
+      ).get(req.params.messageId, req.params.id);
+      if (!message) return res.status(404).json({ error: 'Message not found' });
+      if (message.sender_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own messages' });
+
+      const { ciphertext, iv, version } = req.body.payload;
+      db.prepare(
+        'UPDATE messages SET ciphertext = ?, iv = ?, version = ?, edited = 1 WHERE id = ?'
+      ).run(ciphertext, iv, version || 'v1', req.params.messageId);
+
+      return res.json({ edited: true });
+    } catch (err) {
+      console.error('Edit message error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 // DELETE /api/conversations/:id/messages/:messageId?mode=for_me|for_everyone
 router.delete(

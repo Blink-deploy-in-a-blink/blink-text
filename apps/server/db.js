@@ -18,6 +18,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
+    deleted_at INTEGER DEFAULT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
@@ -51,6 +52,8 @@ db.exec(`
     ciphertext TEXT NOT NULL,
     iv TEXT NOT NULL,
     version TEXT NOT NULL DEFAULT 'v1',
+    reply_to_id TEXT,
+    edited INTEGER NOT NULL DEFAULT 0,
     timestamp INTEGER NOT NULL DEFAULT (unixepoch('now', 'subsec') * 1000)
   );
 
@@ -74,5 +77,11 @@ db.exec(`
     PRIMARY KEY (message_id, user_id)
   );
 `);
+
+// Safe migrations: ALTER TABLE only if column doesn't exist yet
+const userColumns = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+if (!userColumns.includes('deleted_at')) {
+  db.exec("ALTER TABLE users ADD COLUMN deleted_at INTEGER DEFAULT NULL");
+}
 
 module.exports = db;

@@ -7,6 +7,9 @@ const engine = new CryptoEngine(new BrowserProvider());
 
 // In-memory conversation key store: conversationId -> Uint8Array
 const conversationKeys = new Map();
+// Track which peer public key was used to derive each conversation key
+// conversationId -> JSON string of peer's ephemeral public JWK
+const conversationKeyFingerprints = new Map();
 
 let identityKeypair = null;
 let ecdhKeypair = null;
@@ -130,6 +133,8 @@ export async function initializeIdentity() {
 
 /**
  * Set up a conversation key via ECDH key exchange.
+ * If the peer hasn't published their key yet, retries a few times.
+ * Always checks whether the peer has re-keyed and re-derives if so.
  */
 export async function setupConversationKey(conversationId, myUserId) {
   if (!deviceId) throw new Error('Device not initialized. Call initializeIdentity() first.');
@@ -144,26 +149,72 @@ export async function setupConversationKey(conversationId, myUserId) {
     ephemeralPair = { privateKey: storedPrivate };
   } else {
     ephemeralPair = await engine.generateECDHKey();
-    await storeKeyExchange(conversationId, deviceId, ephemeralPair.publicKey);
+    try {
+      await storeKeyExchange(conversationId, deviceId, ephemeralPair.publicKey);
+    } catch (err) {
+      // If the device is no longer recognised (e.g. DB was recreated), re-register
+      if (err.response?.status === 400) {
+        console.warn('[crypto] Device rejected, re-registering…');
+        const device = await registerDevice(
+          identityKeypair.publicKey,
+          ecdhKeypair.publicKey,
+          navigator.userAgent.slice(0, 64)
+        );
+        deviceId = device.id;
+        saveToStorage('blink-device-id', deviceId);
+        await storeKeyExchange(conversationId, deviceId, ephemeralPair.publicKey);
+      } else {
+        throw err;
+      }
+    }
     saveToStorage(`blink-ephemeral-${conversationId}`, ephemeralPair.privateKey);
   }
 
-  const exchangeData = await getKeyExchange(conversationId);
-  const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
+  // Try to find the peer's ephemeral key, with retries
+  const maxRetries = 8;
+  for (let i = 0; i < maxRetries; i++) {
+    const exchangeData = await getKeyExchange(conversationId);
+    const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
 
-  if (peerEntry) {
-    await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
+    if (peerEntry) {
+      const peerFingerprint = JSON.stringify(peerEntry.ephemeralPublicKey);
+      const existingFingerprint = conversationKeyFingerprints.get(conversationId);
+
+      // Derive (or re-derive if the peer has a new key)
+      if (!conversationKeys.has(conversationId) || existingFingerprint !== peerFingerprint) {
+        if (existingFingerprint && existingFingerprint !== peerFingerprint) {
+          console.warn('[crypto] Peer re-keyed for', conversationId, '— re-deriving conversation key');
+        }
+        await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
+      }
+      return;
+    }
+
+    // Wait before retrying (500ms, 1s, 1.5s, ...)
+    if (i < maxRetries - 1) {
+      await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
   }
+  // No peer key found after retries — key will be derived later via socket key_exchange event
 }
 
 /**
  * Called by the socket key_exchange handler when a peer's ephemeral key arrives.
+ * Always re-derives if the peer's key is different from what we used last time.
  */
 export async function completeKeyExchangeFromSocket(conversationId, theirEphemeralPublicKey) {
-  if (conversationKeys.has(conversationId)) return;
+  const peerFingerprint = JSON.stringify(theirEphemeralPublicKey);
+  const existingFingerprint = conversationKeyFingerprints.get(conversationId);
+
+  // Skip only if we already derived with this exact key
+  if (conversationKeys.has(conversationId) && existingFingerprint === peerFingerprint) return;
 
   const ephemeralPrivateKey = loadFromStorage(`blink-ephemeral-${conversationId}`);
   if (!ephemeralPrivateKey) return;
+
+  if (existingFingerprint && existingFingerprint !== peerFingerprint) {
+    console.warn('[crypto] Peer re-keyed via socket for', conversationId, '— re-deriving');
+  }
 
   await _deriveAndStore(conversationId, ephemeralPrivateKey, theirEphemeralPublicKey);
 }
@@ -171,6 +222,8 @@ export async function completeKeyExchangeFromSocket(conversationId, theirEphemer
 async function _deriveAndStore(conversationId, myPrivateKey, theirPublicKey) {
   const key = await engine.deriveConversationKeyFromExchange(myPrivateKey, theirPublicKey, conversationId);
   conversationKeys.set(conversationId, key);
+  // Store a fingerprint so we can detect when the peer re-keys
+  conversationKeyFingerprints.set(conversationId, JSON.stringify(theirPublicKey));
 }
 
 /**

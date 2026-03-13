@@ -26,6 +26,10 @@ function registerSocketHandlers(io) {
   io.on('connection', (socket) => {
     const { id: userId, username } = socket.user;
     console.log(`[WS] User connected: ${username} (${userId})`);
+
+    // Join a personal room so we can send events directly to this user
+    socket.join(userId);
+
     socket.broadcast.emit('user_connected', { userId, username });
 
     socket.on('join_conversation', ({ conversationId }) => {
@@ -78,16 +82,19 @@ function registerSocketHandlers(io) {
       try {
         const messageId = payload.id || uuidv4();
         const timestamp = Date.now();
+        const replyToId = (msg && msg.replyToId) || null;
 
         db.prepare(
-          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', timestamp);
+          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp);
 
         const message = {
           id: messageId,
           conversationId,
           senderId: userId,
           timestamp,
+          replyToId,
+          edited: false,
           payload: { ciphertext, iv, version: version || 'v1' },
         };
 
@@ -112,6 +119,42 @@ function registerSocketHandlers(io) {
       if (!participant) return;
 
       socket.to(conversationId).emit('key_exchange', normalized);
+    });
+
+    socket.on('edit_message', ({ conversationId, messageId, payload: encPayload }, ack) => {
+      if (!conversationId || !messageId || !encPayload) {
+        if (typeof ack === 'function') ack({ error: 'Missing fields' });
+        return;
+      }
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+      if (!participant) {
+        if (typeof ack === 'function') ack({ error: 'Not a participant' });
+        return;
+      }
+
+      try {
+        const message = db.prepare('SELECT sender_id FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, conversationId);
+        if (!message || message.sender_id !== userId) {
+          if (typeof ack === 'function') ack({ error: 'Can only edit your own messages' });
+          return;
+        }
+
+        const { ciphertext, iv, version } = encPayload;
+        db.prepare('UPDATE messages SET ciphertext = ?, iv = ?, version = ?, edited = 1 WHERE id = ?')
+          .run(ciphertext, iv, version || 'v1', messageId);
+
+        io.to(conversationId).emit('message_edited', {
+          conversationId, messageId,
+          payload: { ciphertext, iv, version: version || 'v1' },
+        });
+        if (typeof ack === 'function') ack({ success: true });
+      } catch (err) {
+        console.error('[WS] edit_message error:', err);
+        if (typeof ack === 'function') ack({ error: 'Failed to edit message' });
+      }
     });
 
     socket.on('delete_message', ({ conversationId, messageId, mode }, ack) => {
