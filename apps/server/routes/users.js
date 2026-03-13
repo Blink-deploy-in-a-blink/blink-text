@@ -17,9 +17,10 @@ router.get('/search', [
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   try {
+    const escaped = req.query.q.replace(/[\\%_]/g, '\\$&');
     const users = db.prepare(
-      `SELECT id, username FROM users WHERE username LIKE ? AND id != ? LIMIT 20`
-    ).all(`%${req.query.q}%`, req.user.id);
+      `SELECT id, username FROM users WHERE username LIKE ? ESCAPE '\\' AND id != ? LIMIT 20`
+    ).all(`%${escaped}%`, req.user.id);
 
     return res.json({ users });
   } catch (err) {

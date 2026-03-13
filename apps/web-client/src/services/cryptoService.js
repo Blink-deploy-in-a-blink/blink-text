@@ -25,22 +25,90 @@ function saveToStorage(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+// --- Secure key storage using IndexedDB (avoids storing private keys in localStorage) ---
+const KEY_DB_NAME = 'blink-crypto';
+const KEY_DB_VERSION = 1;
+const KEY_STORE_NAME = 'keys';
+
+function openKeyDatabase() {
+  return new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) {
+      return reject(new Error('IndexedDB not supported'));
+    }
+    const request = indexedDB.open(KEY_DB_NAME, KEY_DB_VERSION);
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(KEY_STORE_NAME)) {
+        db.createObjectStore(KEY_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+    request.onerror = () => {
+      reject(request.error || new Error('Failed to open key database'));
+    };
+  });
+}
+
+async function loadKeyFromSecureStore(key) {
+  try {
+    const db = await openKeyDatabase();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([KEY_STORE_NAME], 'readonly');
+      const store = tx.objectStore(KEY_STORE_NAME);
+      const request = store.get(key);
+      request.onsuccess = () => {
+        resolve(request.result || null);
+      };
+      request.onerror = () => {
+        reject(request.error || new Error('Failed to load key'));
+      };
+    });
+  } catch {
+    // Fallback: do not throw during initialization, just act as if no key is stored.
+    return null;
+  }
+}
+
+async function saveKeyToSecureStore(key, value) {
+  try {
+    const db = await openKeyDatabase();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction([KEY_STORE_NAME], 'readwrite');
+      const store = tx.objectStore(KEY_STORE_NAME);
+      const request = store.put(value, key);
+      request.onsuccess = () => {
+        resolve();
+      };
+      request.onerror = () => {
+        reject(request.error || new Error('Failed to save key'));
+      };
+    });
+  } catch {
+    // If secure storage is unavailable, do NOT fall back to localStorage
+    // for private keys, in order to avoid leaking them.
+  }
+}
+
 /**
  * Load or generate an identity keypair + ECDH keypair, register as a device on the server.
  */
 export async function initializeIdentity() {
-  identityKeypair = loadFromStorage('blink-identity-key');
-  ecdhKeypair = loadFromStorage('blink-ecdh-key');
+  // Load keypairs from secure IndexedDB-backed storage
+  identityKeypair = await loadKeyFromSecureStore('blink-identity-key');
+  ecdhKeypair = await loadKeyFromSecureStore('blink-ecdh-key');
+  // Device identifier is not sensitive cryptographic material; localStorage is acceptable here.
   deviceId = loadFromStorage('blink-device-id');
 
   if (!identityKeypair) {
     identityKeypair = await engine.generateIdentityKey();
-    saveToStorage('blink-identity-key', identityKeypair);
+    await saveKeyToSecureStore('blink-identity-key', identityKeypair);
   }
 
   if (!ecdhKeypair) {
     ecdhKeypair = await engine.generateECDHKey();
-    saveToStorage('blink-ecdh-key', ecdhKeypair);
+    await saveKeyToSecureStore('blink-ecdh-key', ecdhKeypair);
   }
 
   if (!deviceId) {

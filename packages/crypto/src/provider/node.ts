@@ -55,8 +55,8 @@ export class NodeProvider implements CryptoProvider {
     const cipher = nodeCrypto.createCipheriv('aes-256-gcm', keyBuf, iv);
     const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
-    // Prepend 16-byte GCM auth tag to ciphertext so they travel together.
-    const combined = Buffer.concat([tag, encrypted]);
+    // Append 16-byte GCM auth tag after ciphertext, matching Web Crypto API's behavior.
+    const combined = Buffer.concat([encrypted, tag]);
     return {
       ciphertext: combined.toString('base64'),
       iv: iv.toString('base64'),
@@ -68,8 +68,8 @@ export class NodeProvider implements CryptoProvider {
     const keyBuf = Buffer.from(conversationKey);
     const ivBuf = Buffer.from(payload.iv, 'base64');
     const combined = Buffer.from(payload.ciphertext, 'base64');
-    const tag = combined.subarray(0, 16);
-    const encrypted = combined.subarray(16);
+    const tag = combined.subarray(combined.length - 16);
+    const encrypted = combined.subarray(0, combined.length - 16);
     const decipher = nodeCrypto.createDecipheriv('aes-256-gcm', keyBuf, ivBuf);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
@@ -77,7 +77,7 @@ export class NodeProvider implements CryptoProvider {
 
   async signData(privateKeyJwk: JsonWebKey, data: string): Promise<string> {
     const privKey = nodeCrypto.createPrivateKey({ key: privateKeyJwk, format: 'jwk' } as nodeCrypto.JsonWebKeyInput);
-    const sig = nodeCrypto.sign('SHA256', Buffer.from(data, 'utf8'), privKey);
+    const sig = nodeCrypto.sign('SHA256', Buffer.from(data, 'utf8'), { key: privKey, dsaEncoding: 'ieee-p1363' });
     return sig.toString('base64');
   }
 
@@ -86,7 +86,7 @@ export class NodeProvider implements CryptoProvider {
     return nodeCrypto.verify(
       'SHA256',
       Buffer.from(data, 'utf8'),
-      pubKey,
+      { key: pubKey, dsaEncoding: 'ieee-p1363' },
       Buffer.from(signature, 'base64')
     );
   }

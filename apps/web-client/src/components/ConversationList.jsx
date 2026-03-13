@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { getConversations } from '../services/api.js';
 
 const s = {
@@ -32,7 +32,7 @@ const s = {
   },
 };
 
-export default function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout }) {
+const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout }, ref) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -51,8 +51,7 @@ export default function ConversationList({ activeConversationId, onSelect, onNew
     load();
   }, []);
 
-  // Expose refresh for parent
-  ConversationList.refresh = load;
+  useImperativeHandle(ref, () => ({ refresh: load }));
 
   const getDisplayName = (conv) => {
     if (conv.name) return conv.name;
@@ -88,4 +87,6 @@ export default function ConversationList({ activeConversationId, onSelect, onNew
       <button style={s.logoutBtn} onClick={onLogout}>Sign Out</button>
     </aside>
   );
-}
+});
+
+export default ConversationList;

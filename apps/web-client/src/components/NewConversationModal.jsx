@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { createConversation, getConversations } from '../services/api.js';
 
 const s = {
@@ -39,7 +39,7 @@ const s = {
 };
 
 export default function NewConversationModal({ currentUser, onClose, onCreated }) {
-  const [type, setType] = useState('direct');
+  const [type, setType] = useState('direct_message');
   const [recipientUsername, setRecipientUsername] = useState('');
   const [groupName, setGroupName] = useState('');
   const [error, setError] = useState('');
@@ -83,11 +83,11 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
 
         <label style={s.label}>Type</label>
         <select style={s.select} value={type} onChange={(e) => setType(e.target.value)}>
-          <option value="direct">Direct</option>
-          <option value="group">Group</option>
+          <option value="direct_message">Direct</option>
+          <option value="group_chat">Group</option>
         </select>
 
-        {type === 'group' && (
+        {type === 'group_chat' && (
           <>
             <label style={s.label}>Group Name</label>
             <input

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
 import Login from './components/Login.jsx';
@@ -16,6 +16,7 @@ const appStyles = {
 function MessengerView({ user, logout }) {
   const [activeConversation, setActiveConversation] = useState(null);
   const [showNewModal, setShowNewModal] = useState(false);
+  const conversationListRef = useRef(null);
 
   const { messages, loading: msgLoading, sendMessage } = useMessages(
     activeConversation?.id || null,
@@ -28,7 +29,7 @@ function MessengerView({ user, logout }) {
   };
 
   const handleNewConversation = (conv) => {
-    if (ConversationList.refresh) ConversationList.refresh();
+    conversationListRef.current?.refresh();
     handleSelectConversation(conv);
   };
 
@@ -43,6 +44,7 @@ function MessengerView({ user, logout }) {
   return (
     <div style={appStyles.app}>
       <ConversationList
+        ref={conversationListRef}
         activeConversationId={activeConversation?.id}
         onSelect={handleSelectConversation}
         onNewConversation={() => setShowNewModal(true)}

@@ -49,7 +49,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading }
           <p style={s.empty}>No messages yet. Send the first one!</p>
         )}
         {messages.map((msg) => {
-          const mine = msg.sender_id === myUserId;
+          const mine = msg.senderId === myUserId;
           return (
             <div key={msg.id}>
               <div style={s.bubble(mine)}>{msg.plaintext}</div>
