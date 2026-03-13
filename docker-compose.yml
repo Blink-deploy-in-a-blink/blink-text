@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: ./apps/server
+      dockerfile: Dockerfile
+    ports:
+      - '3001:3001'
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - PORT=3001
+      - DATABASE_PATH=/data/blink.db
+      - CLIENT_ORIGIN=http://localhost:5173
+    volumes:
+      - db_data:/data
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ./apps/web-client
+      dockerfile: Dockerfile
+    ports:
+      - '5173:80'
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  db_data:

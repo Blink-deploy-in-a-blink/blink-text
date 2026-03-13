@@ -1,0 +1,34 @@
+{
+  "name": "@blink-text/crypto",
+  "version": "1.0.0",
+  "description": "Platform-agnostic crypto engine for Blink Text",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./provider/browser": {
+      "types": "./dist/provider/browser.d.ts",
+      "import": "./dist/provider/browser.mjs",
+      "require": "./dist/provider/browser.js"
+    },
+    "./provider/node": {
+      "types": "./dist/provider/node.d.ts",
+      "import": "./dist/provider/node.mjs",
+      "require": "./dist/provider/node.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.3"
+  }
+}
