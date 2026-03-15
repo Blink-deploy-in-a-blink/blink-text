@@ -82,7 +82,8 @@ function MessengerView({ user, logout }) {
       try {
         const plaintext = await decryptConversationMessage(msg.conversationId, msg.payload);
         appendCachedMessage(msg.conversationId, { ...msg, plaintext });
-      } catch {
+      } catch (err) {
+        console.warn('[global] Failed to decrypt message for', msg.conversationId, err.message);
         appendCachedMessage(msg.conversationId, { ...msg, plaintext: '[unable to decrypt]' });
       }
     };

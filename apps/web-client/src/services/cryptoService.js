@@ -201,8 +201,10 @@ async function _migrateEphemeralKeys() {
  */
 export async function setupConversationKey(conversationId, myUserId, { maxRetries = 3, retryDelay = 400 } = {}) {
   // Wait for any in-progress setup for this same conversation to finish first.
-  while (setupLocks.has(conversationId)) {
-    await setupLocks.get(conversationId);
+  let existingLock = setupLocks.get(conversationId);
+  while (existingLock) {
+    await existingLock;
+    existingLock = setupLocks.get(conversationId);
   }
 
   // After waiting, the previous call may have already established the key.
