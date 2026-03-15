@@ -8,7 +8,8 @@ const s = {
   },
   modal: {
     background: '#1a1a1a', borderRadius: '12px', padding: '1.5rem',
-    width: '400px', boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
+    width: '100%', maxWidth: '400px', margin: '0 1rem',
+    boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
   },
   title: { color: '#fff', fontWeight: 700, fontSize: '1.1rem', marginBottom: '1rem' },
   label: { display: 'block', color: '#aaa', fontSize: '0.85rem', marginBottom: '0.25rem' },

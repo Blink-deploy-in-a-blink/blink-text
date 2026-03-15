@@ -1,13 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 const s = {
   window: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   header: {
     padding: '1rem 1.5rem', borderBottom: '1px solid #222',
     background: '#111', color: '#fff', fontWeight: 600, fontSize: '1rem',
+    display: 'flex', alignItems: 'center', flexShrink: 0,
   },
-  messages: { flex: 1, overflowY: 'auto', padding: '1rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' },
+  messages: { flex: 1, overflowY: 'auto', padding: '1rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: 0 },
   empty: { color: '#555', textAlign: 'center', padding: '2rem', fontSize: '0.9rem' },
+  loadMore: {
+    alignSelf: 'center', padding: '0.4rem 1rem', borderRadius: '16px',
+    border: '1px solid #333', background: 'transparent', color: '#888',
+    cursor: 'pointer', fontSize: '0.8rem', marginBottom: '0.5rem', flexShrink: 0,
+  },
   row: (mine) => ({
     display: 'flex', flexDirection: mine ? 'row-reverse' : 'row',
     alignItems: 'flex-start', gap: '0.25rem', position: 'relative',
@@ -57,14 +63,77 @@ const s = {
   },
 };
 
-export default function ChatWindow({ conversation, messages, myUserId, loading, onDeleteMessage, onEditMessage, onReply, onNewConversation }) {
+export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onNewConversation, onBack }) {
   const bottomRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y, msg }
   const [hoveredId, setHoveredId] = useState(null);
+  const longPressTimer = useRef(null);
+  const isInitialLoad = useRef(true);
+  const prevMessagesLen = useRef(0);
 
+  // Auto-scroll to bottom on initial load or new messages appended at bottom
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!messages.length) { isInitialLoad.current = true; return; }
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    // If this is the initial load or messages were appended (not prepended), scroll to bottom
+    if (isInitialLoad.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+      isInitialLoad.current = false;
+      prevMessagesLen.current = messages.length;
+      return;
+    }
+
+    // If count grew and the oldest message didn't change → new message at bottom
+    const grew = messages.length > prevMessagesLen.current;
+    prevMessagesLen.current = messages.length;
+    if (grew) {
+      // Check if user was near bottom (within 150px) → auto-scroll
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      const nearBottom = scrollHeight - scrollTop - clientHeight < 150;
+      if (nearBottom) {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
   }, [messages]);
+
+  // Reset initial load flag when conversation changes
+  useEffect(() => {
+    isInitialLoad.current = true;
+    prevMessagesLen.current = 0;
+  }, [conversation?.id]);
+
+  // Preserve scroll position when older messages are prepended
+  const handleLoadMore = useCallback(async () => {
+    const container = messagesContainerRef.current;
+    if (!container || !onLoadMore) return;
+
+    const prevScrollHeight = container.scrollHeight;
+    await onLoadMore();
+
+    // After React re-renders with prepended messages, restore scroll position
+    requestAnimationFrame(() => {
+      const newScrollHeight = container.scrollHeight;
+      container.scrollTop = newScrollHeight - prevScrollHeight;
+    });
+  }, [onLoadMore]);
+
+  // Scroll-to-top detection for auto-loading more
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container || !hasMore) return;
+
+    const onScroll = () => {
+      if (container.scrollTop < 80 && hasMore && !loadingMore) {
+        handleLoadMore();
+      }
+    };
+
+    container.addEventListener('scroll', onScroll);
+    return () => container.removeEventListener('scroll', onScroll);
+  }, [hasMore, loadingMore, handleLoadMore]);
 
   // Close menu on click anywhere
   useEffect(() => {
@@ -127,16 +196,37 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
 
   return (
     <div style={s.window}>
-      <div style={s.header}>{conversation.displayName || 'Conversation'}</div>
-      {conversation.has_deleted_participant && (
+      <div style={s.header}>
+        {onBack && (
+          <button
+            onClick={onBack}
+            style={{
+              background: 'transparent', border: 'none', color: '#ccc',
+              fontSize: '1.4rem', cursor: 'pointer', padding: '0.2rem 0.6rem 0.2rem 0',
+              lineHeight: 1, flexShrink: 0,
+            }}
+            title="Back to conversations"
+          >☰</button>
+        )}
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {conversation.displayName || 'Conversation'}
+        </span>
+      </div>
+      {!!conversation.has_deleted_participant && (
         <div style={{
           padding: '0.5rem 1.5rem', background: '#2a1a1a', borderBottom: '1px solid #333',
-          color: '#f87171', fontSize: '0.8rem', textAlign: 'center',
+          color: '#f87171', fontSize: '0.8rem', textAlign: 'center', flexShrink: 0,
         }}>
           ⚠️ This user has deleted their account. You can no longer send messages.
         </div>
       )}
-      <div style={s.messages}>
+      <div style={s.messages} ref={messagesContainerRef}>
+        {loadingMore && <p style={{ ...s.empty, padding: '0.5rem', fontSize: '0.8rem' }}>Loading older messages…</p>}
+        {!loadingMore && hasMore && (
+          <button style={s.loadMore} onClick={handleLoadMore}>
+            ↑ Load older messages
+          </button>
+        )}
         {loading && <p style={s.empty}>Loading messages…</p>}
         {!loading && messages.length === 0 && (
           <p style={s.empty}>No messages yet. Send the first one!</p>
@@ -150,6 +240,16 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
               style={s.row(mine)}
               onMouseEnter={() => setHoveredId(msg.id)}
               onMouseLeave={() => setHoveredId(null)}
+              onTouchStart={(e) => {
+                const touch = e.touches[0];
+                longPressTimer.current = setTimeout(() => {
+                  const menuWidth = 180;
+                  const x = Math.min(touch.clientX, window.innerWidth - menuWidth - 8);
+                  setMenu({ x, y: touch.clientY, msg });
+                }, 500);
+              }}
+              onTouchEnd={() => clearTimeout(longPressTimer.current)}
+              onTouchMove={() => clearTimeout(longPressTimer.current)}
             >
               {/* 3-dot button — appears on hover, on the outer side of the bubble */}
               {hoveredId === msg.id && (
@@ -166,8 +266,13 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 {replyText && (
                   <div style={s.replyQuote}>↩ {replyText}</div>
                 )}
-                <div style={s.bubble(mine)}>
-                  {msg.plaintext}
+                <div style={msg.plaintext === '[unable to decrypt]'
+                  ? { ...s.bubble(mine), background: '#1a1a2e', border: '1px dashed #333', fontStyle: 'italic', color: '#666', fontSize: '0.82rem' }
+                  : s.bubble(mine)
+                }>
+                  {msg.plaintext === '[unable to decrypt]'
+                    ? '🔒 This message can\'t be decrypted — encryption keys have changed'
+                    : msg.plaintext}
                   {msg.edited && <span style={s.edited}>(edited)</span>}
                 </div>
                 <div style={s.meta(mine)}>{formatTime(msg.timestamp)}</div>

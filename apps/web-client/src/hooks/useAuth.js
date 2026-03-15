@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { login as apiLogin, register as apiRegister } from '../services/api.js';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
-import { initializeIdentity } from '../services/cryptoService.js';
+import { initializeIdentity, clearAllCryptoKeys } from '../services/cryptoService.js';
 
 /**
  * Auth state hook.
@@ -10,13 +10,22 @@ import { initializeIdentity } from '../services/cryptoService.js';
 /**
  * Remove all blink-related data from localStorage (ephemeral keys, device id, etc.)
  */
+import { clearCache as clearMessageCache } from '../services/messageCache.js';
+
 function clearBlinkLocalStorage() {
+  // Clear session keys but preserve crypto keys (ephemeral keys, device ID)
+  // so old messages can still be decrypted if the user logs back in
+  localStorage.removeItem('blink-token');
+  localStorage.removeItem('blink-user');
+  localStorage.removeItem('blink-active-conv');
+}
+
+function clearAllBlinkData() {
+  // Full wipe — used on explicit logout or account deletion
   const keysToRemove = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key && key.startsWith('blink-')) {
-      keysToRemove.push(key);
-    }
+    if (key && key.startsWith('blink-')) keysToRemove.push(key);
   }
   keysToRemove.forEach((k) => localStorage.removeItem(k));
 }
@@ -63,11 +72,13 @@ export function useAuth() {
     localStorage.setItem('blink-token', token);
     localStorage.setItem('blink-user', JSON.stringify(u));
     sessionStorage.setItem('blink-session', '1'); // sentinel: cleared when tab closes
-    setUser(u);
 
-    // Connect socket and initialize crypto identity
+    // Connect socket and initialize crypto identity BEFORE setting user,
+    // so MessengerView doesn't render until identity is ready.
     connectSocket(token);
     await initializeIdentity();
+    setUser(u);
+    setReady(true);
   }, []);
 
   const login = useCallback(
@@ -106,11 +117,14 @@ export function useAuth() {
     [_postLogin]
   );
 
-  const logout = useCallback(() => {
-    clearBlinkLocalStorage();
+  const logout = useCallback(async () => {
+    clearAllBlinkData();
+    clearMessageCache();
+    await clearAllCryptoKeys();
     sessionStorage.removeItem('blink-session');
     disconnectSocket();
     setUser(null);
+    setReady(true);
   }, []);
 
   return { user, loading, error, login, register, logout, ready };

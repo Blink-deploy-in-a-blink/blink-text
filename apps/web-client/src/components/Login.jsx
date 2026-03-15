@@ -3,18 +3,19 @@ import { useState } from 'react';
 const styles = {
   container: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: '100vh', background: '#0f0f0f',
+    height: '100%', background: '#0f0f0f',
   },
   card: {
     background: '#1a1a1a', padding: '2rem', borderRadius: '12px',
-    width: '360px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+    width: '100%', maxWidth: '360px', margin: '0 1rem',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
   },
   title: { fontSize: '1.5rem', fontWeight: 700, marginBottom: '1.5rem', color: '#fff', textAlign: 'center' },
   label: { display: 'block', marginBottom: '0.25rem', color: '#aaa', fontSize: '0.875rem' },
   input: {
     width: '100%', padding: '0.6rem 0.75rem', borderRadius: '8px',
     border: '1px solid #333', background: '#0f0f0f', color: '#fff',
-    fontSize: '1rem', marginBottom: '1rem', outline: 'none',
+    fontSize: '16px', marginBottom: '1rem', outline: 'none',
   },
   btn: {
     width: '100%', padding: '0.7rem', borderRadius: '8px', border: 'none',

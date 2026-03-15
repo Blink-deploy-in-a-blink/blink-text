@@ -12,6 +12,34 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Auto-logout on expired/invalid token (401 or 403 on authenticated routes)
+let isLoggingOut = false;
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      !isLoggingOut &&
+      error.response &&
+      (error.response.status === 401 || error.response.status === 403) &&
+      // Don't auto-logout on login/register failures
+      !error.config.url?.includes('/api/auth/login') &&
+      !error.config.url?.includes('/api/auth/register')
+    ) {
+      isLoggingOut = true;
+      console.warn('[api] Token expired or invalid — clearing session');
+      // Only clear session keys, NOT crypto keys (ephemeral keys, device ID)
+      // so old messages can still be decrypted after re-login
+      localStorage.removeItem('blink-token');
+      localStorage.removeItem('blink-user');
+      localStorage.removeItem('blink-active-conv');
+      sessionStorage.removeItem('blink-session');
+      // Reload to reset all state cleanly
+      window.location.reload();
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const register = (username, password) =>
   api.post('/api/auth/register', { username, password }).then((r) => r.data);
 
@@ -24,8 +52,12 @@ export const getConversations = () =>
 export const createConversation = (type, participants, name) =>
   api.post('/api/conversations', { type, participants, name }).then((r) => r.data.conversation);
 
-export const getMessages = (conversationId) =>
-  api.get(`/api/conversations/${conversationId}/messages`).then((r) => r.data.messages);
+export const getMessages = (conversationId, { limit, before } = {}) => {
+  const params = {};
+  if (limit) params.limit = limit;
+  if (before) params.before = before;
+  return api.get(`/api/conversations/${conversationId}/messages`, { params }).then((r) => r.data);
+};
 
 export const getParticipants = (conversationId) =>
   api.get(`/api/conversations/${conversationId}/participants`).then((r) => r.data.participants);

@@ -13,16 +13,19 @@ router.use(authenticateToken);
 // GET /api/conversations
 router.get('/', (req, res) => {
   try {
+    // First, get all conversation IDs the current user is part of
+    // Then, for each conversation, get participant info
     const conversations = db.prepare(`
       SELECT c.id, c.type, c.name, c.created_at,
-             GROUP_CONCAT(CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
-             GROUP_CONCAT(u.id) AS participant_ids,
+             GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
+             GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
              MAX(CASE WHEN u.deleted_at IS NOT NULL AND u.id != ? THEN 1 ELSE 0 END) AS has_deleted_participant
       FROM conversations c
       JOIN conversation_participants cp ON cp.conversation_id = c.id
-      JOIN conversation_participants cp2 ON cp2.conversation_id = c.id
-        AND cp2.user_id = ?
       JOIN users u ON u.id = cp.user_id
+      WHERE c.id IN (
+        SELECT conversation_id FROM conversation_participants WHERE user_id = ?
+      )
       GROUP BY c.id
       ORDER BY c.created_at DESC
     `).all(req.user.id, req.user.id);
@@ -99,7 +102,7 @@ router.post(
   }
 );
 
-// GET /api/conversations/:id/messages
+// GET /api/conversations/:id/messages?limit=50&before=<timestamp>
 router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -111,14 +114,36 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
 
     if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
 
-    const rows = db.prepare(`
-      SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
-      FROM messages
-      WHERE conversation_id = ?
-        AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
-      ORDER BY timestamp ASC
-      LIMIT 200
-    `).all(req.params.id, req.user.id);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const before = req.query.before ? parseInt(req.query.before) : null;
+
+    let rows;
+    if (before) {
+      // Load older messages before the cursor timestamp
+      rows = db.prepare(`
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
+        FROM messages
+        WHERE conversation_id = ?
+          AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
+          AND timestamp < ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `).all(req.params.id, req.user.id, before, limit);
+      // Reverse to get chronological order
+      rows.reverse();
+    } else {
+      // Load the latest messages
+      rows = db.prepare(`
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
+        FROM messages
+        WHERE conversation_id = ?
+          AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `).all(req.params.id, req.user.id, limit);
+      // Reverse to get chronological order
+      rows.reverse();
+    }
 
     // Return messages in the canonical EncryptedMessage format
     const messages = rows.map((row) => ({
@@ -135,7 +160,8 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
       },
     }));
 
-    return res.json({ messages });
+    // hasMore: true if we got exactly `limit` rows (more might exist)
+    return res.json({ messages, hasMore: rows.length === limit });
   } catch (err) {
     console.error('Get messages error:', err);
     return res.status(500).json({ error: 'Internal server error' });

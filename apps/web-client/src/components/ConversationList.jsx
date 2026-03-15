@@ -6,10 +6,11 @@ const s = {
   sidebar: {
     width: '280px', borderRight: '1px solid #222', display: 'flex',
     flexDirection: 'column', background: '#111', flexShrink: 0,
+    height: '100%', overflow: 'hidden',
   },
   header: {
     padding: '1rem', borderBottom: '1px solid #222', display: 'flex',
-    alignItems: 'center', justifyContent: 'space-between',
+    alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
   },
   title: { color: '#fff', fontWeight: 700, fontSize: '1.1rem' },
   newBtn: {
@@ -28,6 +29,7 @@ const s = {
   empty: { color: '#555', textAlign: 'center', padding: '2rem 1rem', fontSize: '0.875rem' },
   footer: {
     borderTop: '1px solid #222', padding: '0.5rem 0.75rem',
+    flexShrink: 0, overflowY: 'auto', maxHeight: '50%',
   },
   profileBtn: {
     width: '100%', padding: '0.6rem 0.75rem', border: 'none', borderRadius: '6px',
@@ -59,14 +61,14 @@ const s = {
   searchInput: {
     width: '100%', padding: '0.5rem 0.75rem', borderRadius: '8px',
     border: '1px solid #222', background: '#0f0f0f', color: '#fff',
-    fontSize: '0.85rem', outline: 'none', margin: '0.5rem 0',
+    fontSize: '16px', outline: 'none', margin: '0.5rem 0',
   },
   searchWrap: {
-    padding: '0 0.75rem',
+    padding: '0 0.75rem', flexShrink: 0,
   },
 };
 
-const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser }, ref) {
+const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser, isMobile }, ref) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
@@ -80,6 +82,7 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
   const [keepConvos, setKeepConvos] = useState(true);
   const [deleteMsg, setDeleteMsg] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   const load = async () => {
     try {
@@ -169,7 +172,10 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
   };
 
   return (
-    <aside style={s.sidebar}>
+    <aside style={{
+      ...s.sidebar,
+      ...(isMobile ? { width: '100%', borderRight: 'none' } : {}),
+    }}>
       <div style={s.header}>
         <span style={s.title}>💬 Conversations</span>
         <button style={s.newBtn} onClick={onNewConversation}>+ New</button>
@@ -304,7 +310,58 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
           </div>
         )}
 
-        <button style={s.logoutBtn} onClick={onLogout}>Sign Out</button>
+        <button style={s.logoutBtn} onClick={() => setShowLogoutConfirm(true)}>Sign Out</button>
+
+        {/* Logout confirmation modal */}
+        {showLogoutConfirm && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          }}>
+            <div style={{
+              background: '#1a1a2e', borderRadius: '16px', padding: '2rem',
+              maxWidth: '420px', width: '90%', color: '#fff',
+              boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+            }}>
+              <div style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                ⚠️ Sign out?
+              </div>
+              <p style={{ color: '#ccc', fontSize: '0.9rem', lineHeight: 1.6, margin: '0 0 0.5rem' }}>
+                Signing out will <strong style={{ color: '#f87171' }}>permanently erase your encryption keys</strong> from this device.
+              </p>
+              <p style={{ color: '#aaa', fontSize: '0.85rem', lineHeight: 1.6, margin: '0 0 1.25rem' }}>
+                You will <strong>not be able to read previous messages</strong> when you log back in. 
+                New messages after re-login will work normally with fresh keys.
+              </p>
+              <div style={{
+                background: '#2a1a1a', border: '1px solid #f8717133', borderRadius: '8px',
+                padding: '0.75rem', marginBottom: '1.25rem', fontSize: '0.8rem', color: '#f87171', lineHeight: 1.5,
+              }}>
+                🔑 This action is irreversible. Your message history on this device will become unreadable.
+              </div>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button
+                  style={{
+                    flex: 1, padding: '0.7rem', borderRadius: '8px', border: '1px solid #333',
+                    background: 'transparent', color: '#ccc', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
+                  }}
+                  onClick={() => setShowLogoutConfirm(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{
+                    flex: 1, padding: '0.7rem', borderRadius: '8px', border: 'none',
+                    background: '#dc2626', color: '#fff', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
+                  }}
+                  onClick={() => { setShowLogoutConfirm(false); onLogout(); }}
+                >
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

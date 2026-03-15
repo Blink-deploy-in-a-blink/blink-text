@@ -1,6 +1,7 @@
 // Client-side crypto service using the @blink-text/crypto browser provider.
 import { CryptoEngine, BrowserProvider } from '@blink-text/crypto';
 import { registerDevice, storeKeyExchange, getKeyExchange } from './api.js';
+import { sendKeyExchange, joinConversation } from './socket.js';
 
 // Engine backed by browser Web Crypto API
 const engine = new CryptoEngine(new BrowserProvider());
@@ -10,6 +11,10 @@ const conversationKeys = new Map();
 // Track which peer public key was used to derive each conversation key
 // conversationId -> JSON string of peer's ephemeral public JWK
 const conversationKeyFingerprints = new Map();
+// In-memory ephemeral private keys — used to avoid the race condition where
+// completeKeyExchangeFromSocket is called before localStorage.setItem finishes
+// conversationId -> privateKey object
+const ephemeralPrivateKeys = new Map();
 
 let identityKeypair = null;
 let ecdhKeypair = null;
@@ -94,6 +99,21 @@ async function saveKeyToSecureStore(key, value) {
   }
 }
 
+async function clearSecureStore() {
+  try {
+    const db = await openKeyDatabase();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction([KEY_STORE_NAME], 'readwrite');
+      const store = tx.objectStore(KEY_STORE_NAME);
+      const request = store.clear();
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    // If clear fails, not critical
+  }
+}
+
 /**
  * Load or generate an identity keypair + ECDH keypair, register as a device on the server.
  */
@@ -124,6 +144,9 @@ export async function initializeIdentity() {
     saveToStorage('blink-device-id', deviceId);
   }
 
+  // Migrate any ephemeral keys from old localStorage format to IndexedDB
+  await _migrateEphemeralKeys();
+
   return {
     identityPublicKey: identityKeypair.publicKey,
     ecdhPublicKey: ecdhKeypair.publicKey,
@@ -132,23 +155,67 @@ export async function initializeIdentity() {
 }
 
 /**
+ * Migrate ephemeral keys from localStorage to IndexedDB (one-time).
+ * Called during identity init to preserve keys from the old storage format.
+ */
+async function _migrateEphemeralKeys() {
+  const keysToMigrate = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('blink-ephemeral-')) {
+      keysToMigrate.push(key);
+    }
+  }
+  for (const lsKey of keysToMigrate) {
+    try {
+      const conversationId = lsKey.replace('blink-ephemeral-', '');
+      const value = JSON.parse(localStorage.getItem(lsKey));
+      if (value) {
+        await saveKeyToSecureStore(`ephemeral-${conversationId}`, value);
+        ephemeralPrivateKeys.set(conversationId, value);
+        localStorage.removeItem(lsKey);
+      }
+    } catch {
+      // Skip failed migrations
+    }
+  }
+}
+
+/**
  * Set up a conversation key via ECDH key exchange.
  * If the peer hasn't published their key yet, retries a few times.
  * Always checks whether the peer has re-keyed and re-derives if so.
+ *
+ * @param {string} conversationId
+ * @param {string} myUserId
+ * @param {object} [options]
+ * @param {number} [options.maxRetries=3] - Number of retries (use 0 for fire-and-forget preloading)
+ * @param {number} [options.retryDelay=400] - Base delay in ms between retries
  */
-export async function setupConversationKey(conversationId, myUserId) {
+export async function setupConversationKey(conversationId, myUserId, { maxRetries = 3, retryDelay = 400 } = {}) {
   if (!deviceId) throw new Error('Device not initialized. Call initializeIdentity() first.');
+
+  // Always join the socket room so we can receive key_exchange events
+  joinConversation(conversationId);
 
   // Reuse an existing ephemeral key if we already published one for this conversation,
   // otherwise generate and publish a new one.
   let ephemeralPair;
-  const storedPrivate = loadFromStorage(`blink-ephemeral-${conversationId}`);
+  // Check in-memory first, then IndexedDB
+  const storedPrivate = ephemeralPrivateKeys.get(conversationId)
+    || await loadKeyFromSecureStore(`ephemeral-${conversationId}`);
 
   if (storedPrivate) {
     // We already published our ephemeral key — reuse the private half.
     ephemeralPair = { privateKey: storedPrivate };
+    ephemeralPrivateKeys.set(conversationId, storedPrivate);
   } else {
     ephemeralPair = await engine.generateECDHKey();
+
+    // Store in memory immediately so completeKeyExchangeFromSocket can use it
+    // even if the socket event arrives before IndexedDB write completes
+    ephemeralPrivateKeys.set(conversationId, ephemeralPair.privateKey);
+
     try {
       await storeKeyExchange(conversationId, deviceId, ephemeralPair.publicKey);
     } catch (err) {
@@ -167,32 +234,46 @@ export async function setupConversationKey(conversationId, myUserId) {
         throw err;
       }
     }
-    saveToStorage(`blink-ephemeral-${conversationId}`, ephemeralPair.privateKey);
+    // Persist to IndexedDB (durable across token expiry / page reload)
+    await saveKeyToSecureStore(`ephemeral-${conversationId}`, ephemeralPair.privateKey);
+
+    // Notify the peer via socket so they can derive immediately
+    sendKeyExchange(conversationId, myUserId, deviceId, ephemeralPair.publicKey);
+  }
+
+  // If we already have a valid conversation key, just verify it's still fresh
+  if (conversationKeys.has(conversationId)) {
+    // Still do one check to see if peer re-keyed
+    try {
+      const exchangeData = await getKeyExchange(conversationId);
+      const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
+      if (peerEntry) {
+        const peerFingerprint = JSON.stringify(peerEntry.ephemeralPublicKey);
+        const existingFingerprint = conversationKeyFingerprints.get(conversationId);
+        if (existingFingerprint !== peerFingerprint) {
+          console.warn('[crypto] Peer re-keyed for', conversationId, '— re-deriving conversation key');
+          await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
+        }
+      }
+    } catch {
+      // Non-critical — we already have a key
+    }
+    return;
   }
 
   // Try to find the peer's ephemeral key, with retries
-  const maxRetries = 8;
-  for (let i = 0; i < maxRetries; i++) {
+  for (let i = 0; i <= maxRetries; i++) {
     const exchangeData = await getKeyExchange(conversationId);
     const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
 
     if (peerEntry) {
-      const peerFingerprint = JSON.stringify(peerEntry.ephemeralPublicKey);
-      const existingFingerprint = conversationKeyFingerprints.get(conversationId);
-
-      // Derive (or re-derive if the peer has a new key)
-      if (!conversationKeys.has(conversationId) || existingFingerprint !== peerFingerprint) {
-        if (existingFingerprint && existingFingerprint !== peerFingerprint) {
-          console.warn('[crypto] Peer re-keyed for', conversationId, '— re-deriving conversation key');
-        }
-        await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
-      }
+      await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
       return;
     }
 
-    // Wait before retrying (500ms, 1s, 1.5s, ...)
-    if (i < maxRetries - 1) {
-      await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    // Wait before retrying
+    if (i < maxRetries) {
+      await new Promise((r) => setTimeout(r, retryDelay));
     }
   }
   // No peer key found after retries — key will be derived later via socket key_exchange event
@@ -209,8 +290,13 @@ export async function completeKeyExchangeFromSocket(conversationId, theirEphemer
   // Skip only if we already derived with this exact key
   if (conversationKeys.has(conversationId) && existingFingerprint === peerFingerprint) return;
 
-  const ephemeralPrivateKey = loadFromStorage(`blink-ephemeral-${conversationId}`);
-  if (!ephemeralPrivateKey) return;
+  // Try in-memory first (avoids race), then fall back to IndexedDB
+  const ephemeralPrivateKey = ephemeralPrivateKeys.get(conversationId)
+    || await loadKeyFromSecureStore(`ephemeral-${conversationId}`);
+  if (!ephemeralPrivateKey) {
+    console.warn('[crypto] No ephemeral private key for', conversationId, '— cannot complete key exchange from socket');
+    return;
+  }
 
   if (existingFingerprint && existingFingerprint !== peerFingerprint) {
     console.warn('[crypto] Peer re-keyed via socket for', conversationId, '— re-deriving');
@@ -251,4 +337,19 @@ export function hasConversationKey(conversationId) {
 
 export function getDeviceId() {
   return deviceId;
+}
+
+/**
+ * Wipe all crypto state — called on explicit logout.
+ * Clears in-memory keys, IndexedDB secure store, and device ID from localStorage.
+ */
+export async function clearAllCryptoKeys() {
+  conversationKeys.clear();
+  conversationKeyFingerprints.clear();
+  ephemeralPrivateKeys.clear();
+  identityKeypair = null;
+  ecdhKeypair = null;
+  deviceId = null;
+  localStorage.removeItem('blink-device-id');
+  await clearSecureStore();
 }

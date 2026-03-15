@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 
 const s = {
-  wrapper: { borderTop: '1px solid #222', background: '#111' },
+  wrapper: { borderTop: '1px solid #222', background: '#111', flexShrink: 0 },
   replyBar: {
     display: 'flex', alignItems: 'center', gap: '0.5rem',
     padding: '0.4rem 1rem', background: '#1a1a2e', borderBottom: '1px solid #222',
@@ -26,7 +26,7 @@ const s = {
   textarea: {
     flex: 1, resize: 'none', background: '#1a1a1a', color: '#fff',
     border: '1px solid #333', borderRadius: '10px', padding: '0.6rem 0.85rem',
-    fontSize: '0.95rem', outline: 'none', fontFamily: 'inherit', lineHeight: 1.5,
+    fontSize: '16px', outline: 'none', fontFamily: 'inherit', lineHeight: 1.5,
     maxHeight: '120px', overflowY: 'auto',
   },
   btn: {

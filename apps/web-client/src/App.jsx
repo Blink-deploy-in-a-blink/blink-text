@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
+import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
 import { getSocket } from './services/socket.js';
+import { completeKeyExchangeFromSocket } from './services/cryptoService.js';
 import Login from './components/Login.jsx';
 import Register from './components/Register.jsx';
 import ConversationList from './components/ConversationList.jsx';
@@ -10,11 +12,24 @@ import MessageInput from './components/MessageInput.jsx';
 import NewConversationModal from './components/NewConversationModal.jsx';
 
 const appStyles = {
-  app: { display: 'flex', height: '100vh', overflow: 'hidden', background: '#0f0f0f' },
-  main: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  app: { display: 'flex', height: '100%', overflow: 'hidden', background: '#0f0f0f' },
+  main: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 },
 };
 
+// Simple mobile detection via width
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const onResize = () => setMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return mobile;
+}
+
 function MessengerView({ user, logout }) {
+  const isMobile = useIsMobile();
+
   const [activeConversation, setActiveConversation] = useState(() => {
     try {
       const raw = localStorage.getItem('blink-active-conv');
@@ -26,7 +41,32 @@ function MessengerView({ user, logout }) {
   const [editingMsg, setEditingMsg] = useState(null);
   const conversationListRef = useRef(null);
 
-  const { messages, loading: msgLoading, sendMessage, deleteMessage, editMessage } = useMessages(
+  // Background preload all conversations' keys + messages
+  useBackgroundPreloader(user.id);
+
+  // Global key_exchange listener — handles key exchanges for ANY conversation,
+  // not just the active one. This ensures that when the peer opens a conversation
+  // and publishes their key, we derive the shared secret even if we're looking
+  // at a different chat. The useMessages hook handles key_exchange for the active conv.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleGlobalKeyExchange = async ({ conversationId, ephemeralPublicKey }) => {
+      // The active conversation's key_exchange is handled by useMessages, skip it here
+      if (conversationId === activeConversation?.id) return;
+      try {
+        await completeKeyExchangeFromSocket(conversationId, ephemeralPublicKey);
+      } catch (err) {
+        console.warn('[global] key_exchange handling failed for', conversationId, err.message);
+      }
+    };
+
+    socket.on('key_exchange', handleGlobalKeyExchange);
+    return () => { socket.off('key_exchange', handleGlobalKeyExchange); };
+  }, [activeConversation?.id]);
+
+  const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, deleteMessage, editMessage } = useMessages(
     activeConversation?.id || null,
     user.id
   );
@@ -80,38 +120,58 @@ function MessengerView({ user, logout }) {
     }
   };
 
+  // On mobile: show sidebar when no conversation selected, show chat when one is selected
+  const showSidebar = !isMobile || !activeConversation;
+  const showChat = !isMobile || !!activeConversation;
+
+  const handleBack = () => {
+    setActiveConversation(null);
+    localStorage.removeItem('blink-active-conv');
+    setReplyTo(null);
+    setEditingMsg(null);
+  };
+
   return (
     <div style={appStyles.app}>
-      <ConversationList
-        ref={conversationListRef}
-        activeConversationId={activeConversation?.id}
-        onSelect={handleSelectConversation}
-        onNewConversation={() => setShowNewModal(true)}
-        onLogout={logout}
-        currentUser={user}
-      />
-      <div style={appStyles.main}>
-        <ChatWindow
-          conversation={activeConversation}
-          messages={messages}
-          myUserId={user.id}
-          loading={msgLoading}
-          onDeleteMessage={deleteMessage}
-          onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
-          onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
+      {showSidebar && (
+        <ConversationList
+          ref={conversationListRef}
+          activeConversationId={activeConversation?.id}
+          onSelect={handleSelectConversation}
           onNewConversation={() => setShowNewModal(true)}
+          onLogout={logout}
+          currentUser={user}
+          isMobile={isMobile}
         />
-        <MessageInput
-          onSend={handleSend}
-          onSaveEdit={handleSaveEdit}
-          disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
-          replyTo={replyTo}
-          editingMsg={editingMsg}
-          onCancelReply={() => setReplyTo(null)}
-          onCancelEdit={() => setEditingMsg(null)}
-          peerDeleted={!!activeConversation?.has_deleted_participant}
-        />
-      </div>
+      )}
+      {showChat && (
+        <div style={appStyles.main}>
+          <ChatWindow
+            conversation={activeConversation}
+            messages={messages}
+            myUserId={user.id}
+            loading={msgLoading}
+            loadingMore={loadingMore}
+            hasMore={hasMore}
+            onLoadMore={loadMore}
+            onDeleteMessage={deleteMessage}
+            onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
+            onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
+            onNewConversation={() => setShowNewModal(true)}
+            onBack={isMobile ? handleBack : null}
+          />
+          <MessageInput
+            onSend={handleSend}
+            onSaveEdit={handleSaveEdit}
+            disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
+            replyTo={replyTo}
+            editingMsg={editingMsg}
+            onCancelReply={() => setReplyTo(null)}
+            onCancelEdit={() => setEditingMsg(null)}
+            peerDeleted={!!activeConversation?.has_deleted_participant}
+          />
+        </div>
+      )}
 
       {showNewModal && (
         <NewConversationModal
@@ -130,7 +190,7 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0f0f0f', color: '#888' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: '#0f0f0f', color: '#888' }}>
         Initializing…
       </div>
     );

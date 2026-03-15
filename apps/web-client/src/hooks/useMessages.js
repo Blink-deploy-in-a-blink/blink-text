@@ -9,10 +9,19 @@ import {
   completeKeyExchangeFromSocket,
   hasConversationKey,
 } from '../services/cryptoService.js';
+import {
+  getCachedMessages,
+  setCachedMessages,
+  appendCachedMessage,
+  updateCachedMessage,
+  removeCachedMessage,
+} from '../services/messageCache.js';
 
 export function useMessages(conversationId, myUserId) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -20,39 +29,89 @@ export function useMessages(conversationId, myUserId) {
     return () => { isMounted.current = false; };
   }, []);
 
-  // Load message history when conversation changes
-  useEffect(() => {
-    if (!conversationId) { setMessages([]); return; }
+  // Decrypt a batch of raw messages
+  const decryptBatch = useCallback(async (rawMessages) => {
+    return Promise.all(
+      rawMessages.map(async (msg) => {
+        try {
+          const plaintext = await decryptConversationMessage(conversationId, msg.payload);
+          return { ...msg, plaintext };
+        } catch (err) {
+          console.warn('[useMessages] Failed to decrypt message:', msg.id, err);
+          return { ...msg, plaintext: '[unable to decrypt]' };
+        }
+      })
+    );
+  }, [conversationId]);
 
-    setLoading(true);
+  // Load message history when conversation changes (latest page)
+  useEffect(() => {
+    if (!conversationId) { setMessages([]); setHasMore(false); return; }
+
+    // Show cached messages immediately if available
+    const cached = getCachedMessages(conversationId);
+    if (cached) {
+      setMessages(cached.messages);
+      setHasMore(cached.hasMore);
+    }
+
+    setLoading(!cached); // Only show loading spinner if no cache
+
+    let cancelled = false;
     (async () => {
       try {
-        // Always run setupConversationKey — it checks for stale keys and re-derives if needed
-        await setupConversationKey(conversationId, myUserId);
-
+        // Join the socket room first so we receive key_exchange events during setup
         joinConversation(conversationId);
 
-        const rawMessages = await getMessages(conversationId);
-        const decrypted = await Promise.all(
-          rawMessages.map(async (msg) => {
-            try {
-              const plaintext = await decryptConversationMessage(conversationId, msg.payload);
-              return { ...msg, plaintext };
-            } catch (err) {
-              console.warn('[useMessages] Failed to decrypt message:', msg.id, err);
-              return { ...msg, plaintext: '[unable to decrypt]' };
-            }
-          })
-        );
+        // Set up key — uses 3 retries by default (max ~1.2s wait)
+        await setupConversationKey(conversationId, myUserId);
 
-        if (isMounted.current) setMessages(decrypted);
+        // If we still don't have a key (peer hasn't published yet), show cached or empty
+        if (!hasConversationKey(conversationId)) {
+          if (isMounted.current && !cancelled) setLoading(false);
+          return;
+        }
+
+        const { messages: rawMessages, hasMore: more } = await getMessages(conversationId, { limit: 50 });
+        const decrypted = await decryptBatch(rawMessages);
+
+        if (isMounted.current && !cancelled) {
+          setMessages(decrypted);
+          setHasMore(more);
+          setCachedMessages(conversationId, decrypted, more);
+        }
       } catch (err) {
         console.error('Failed to load messages:', err);
       } finally {
-        if (isMounted.current) setLoading(false);
+        if (isMounted.current && !cancelled) setLoading(false);
       }
     })();
-  }, [conversationId, myUserId]);
+
+    return () => { cancelled = true; };
+  }, [conversationId, myUserId, decryptBatch]);
+
+  // Load older messages (called when user scrolls to top)
+  const loadMore = useCallback(async () => {
+    if (!conversationId || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : undefined;
+      const { messages: rawOlder, hasMore: more } = await getMessages(conversationId, { limit: 50, before: oldestTimestamp });
+      const decrypted = await decryptBatch(rawOlder);
+      if (isMounted.current) {
+        setMessages((prev) => {
+          const merged = [...decrypted, ...prev];
+          setCachedMessages(conversationId, merged, more);
+          return merged;
+        });
+        setHasMore(more);
+      }
+    } catch (err) {
+      console.error('Failed to load older messages:', err);
+    } finally {
+      if (isMounted.current) setLoadingMore(false);
+    }
+  }, [conversationId, loadingMore, hasMore, messages, decryptBatch]);
 
   // Socket event listeners
   useEffect(() => {
@@ -61,15 +120,21 @@ export function useMessages(conversationId, myUserId) {
     if (!socket) return;
 
     const onMessage = async (msg) => {
+      // Only handle messages for the currently active conversation
+      if (msg.conversationId !== conversationId) return;
       try {
         const plaintext = await decryptConversationMessage(conversationId, msg.payload);
+        const decryptedMsg = { ...msg, plaintext };
+        appendCachedMessage(conversationId, decryptedMsg);
         if (isMounted.current) {
-          setMessages((prev) => [...prev, { ...msg, plaintext }]);
+          setMessages((prev) => [...prev, decryptedMsg]);
         }
       } catch (err) {
         console.warn('[useMessages] Failed to decrypt incoming message:', msg.id, err);
+        const failedMsg = { ...msg, plaintext: '[unable to decrypt]' };
+        appendCachedMessage(conversationId, failedMsg);
         if (isMounted.current) {
-          setMessages((prev) => [...prev, { ...msg, plaintext: '[unable to decrypt]' }]);
+          setMessages((prev) => [...prev, failedMsg]);
         }
       }
     };
@@ -78,10 +143,11 @@ export function useMessages(conversationId, myUserId) {
       if (cid !== conversationId) return;
       await completeKeyExchangeFromSocket(conversationId, ephemeralPublicKey);
 
-      // Re-decrypt all loaded messages with the (possibly updated) key
+      // Now that we have the key, fetch and decrypt messages
       if (!isMounted.current) return;
+      if (!hasConversationKey(conversationId)) return;
       try {
-        const rawMessages = await getMessages(conversationId);
+        const { messages: rawMessages, hasMore: more } = await getMessages(conversationId, { limit: 50 });
         const decrypted = await Promise.all(
           rawMessages.map(async (msg) => {
             try {
@@ -92,21 +158,29 @@ export function useMessages(conversationId, myUserId) {
             }
           })
         );
-        if (isMounted.current) setMessages(decrypted);
+        if (isMounted.current) {
+          setMessages(decrypted);
+          setHasMore(more);
+          setCachedMessages(conversationId, decrypted, more);
+        }
       } catch {
         // If re-fetch fails, leave existing messages as-is
       }
     };
 
-    const onMessageDeleted = ({ messageId }) => {
+    const onMessageDeleted = ({ conversationId: cid, messageId }) => {
+      if (cid !== conversationId) return;
+      removeCachedMessage(conversationId, messageId);
       if (isMounted.current) {
         setMessages((prev) => prev.filter((m) => m.id !== messageId));
       }
     };
 
-    const onMessageEdited = async ({ messageId, payload }) => {
+    const onMessageEdited = async ({ conversationId: cid, messageId, payload }) => {
+      if (cid !== conversationId) return;
       try {
         const plaintext = await decryptConversationMessage(conversationId, payload);
+        updateCachedMessage(conversationId, messageId, (m) => ({ ...m, plaintext, edited: true, payload }));
         if (isMounted.current) {
           setMessages((prev) => prev.map((m) =>
             m.id === messageId ? { ...m, plaintext, edited: true, payload } : m
@@ -132,8 +206,22 @@ export function useMessages(conversationId, myUserId) {
 
   const sendMsg = useCallback(async (plaintext, replyToId = null) => {
     if (!conversationId) return;
+
+    // If we don't have a key yet, try to set up with more retries + longer delays
     if (!hasConversationKey(conversationId)) {
-      await setupConversationKey(conversationId, myUserId);
+      await setupConversationKey(conversationId, myUserId, { maxRetries: 6, retryDelay: 500 });
+    }
+
+    // Still no key — wait a bit more for socket-based key_exchange to arrive
+    if (!hasConversationKey(conversationId)) {
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (hasConversationKey(conversationId)) break;
+      }
+    }
+
+    if (!hasConversationKey(conversationId)) {
+      throw new Error('Could not establish encryption with the other user. They may not have opened this conversation yet.');
     }
     const payload = await encryptForConversation(conversationId, plaintext);
     const id = uuidv4();
@@ -142,6 +230,7 @@ export function useMessages(conversationId, myUserId) {
 
   const deleteMsg = useCallback(async (messageId, mode = 'for_me') => {
     if (!conversationId) return;
+    removeCachedMessage(conversationId, messageId);
     setMessages((prev) => prev.filter((m) => m.id !== messageId));
     try {
       if (mode === 'for_everyone') {
@@ -164,6 +253,7 @@ export function useMessages(conversationId, myUserId) {
     }
     const payload = await encryptForConversation(conversationId, newPlaintext);
     // Optimistic update
+    updateCachedMessage(conversationId, messageId, (m) => ({ ...m, plaintext: newPlaintext, edited: true, payload }));
     setMessages((prev) => prev.map((m) =>
       m.id === messageId ? { ...m, plaintext: newPlaintext, edited: true, payload } : m
     ));
@@ -173,5 +263,5 @@ export function useMessages(conversationId, myUserId) {
     }
   }, [conversationId, myUserId]);
 
-  return { messages, loading, sendMessage: sendMsg, deleteMessage: deleteMsg, editMessage: editMsg };
+  return { messages, loading, loadingMore, hasMore, loadMore, sendMessage: sendMsg, deleteMessage: deleteMsg, editMessage: editMsg };
 }
