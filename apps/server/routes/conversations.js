@@ -66,7 +66,22 @@ router.post(
           WHERE c.type = 'direct_message'
           LIMIT 1
         `).get(userA, userB);
-        if (existing) return res.json({ conversation: existing });
+        if (existing) {
+          // Return enriched conversation data (not just {id}) so the client
+          // gets participant_usernames, participant_ids, etc.
+          const enriched = db.prepare(`
+            SELECT c.id, c.type, c.name, c.created_at,
+                   GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
+                   GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
+                   MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
+            FROM conversations c
+            JOIN conversation_participants cp ON cp.conversation_id = c.id
+            JOIN users u ON u.id = cp.user_id
+            WHERE c.id = ?
+            GROUP BY c.id
+          `).get(existing.id);
+          return res.json({ conversation: enriched || existing });
+        }
       }
 
       for (const uid of allParticipants) {

@@ -335,20 +335,19 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
               boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
             }}>
               <div style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                ⚠️ Sign out?
+                Sign out?
               </div>
               <p style={{ color: '#ccc', fontSize: '0.9rem', lineHeight: 1.6, margin: '0 0 0.5rem' }}>
-                Signing out will <strong style={{ color: '#f87171' }}>permanently erase your encryption keys</strong> from this device.
+                You will be signed out of your account on this device.
               </p>
               <p style={{ color: '#aaa', fontSize: '0.85rem', lineHeight: 1.6, margin: '0 0 1.25rem' }}>
-                You will <strong>not be able to read previous messages</strong> when you log back in. 
-                New messages after re-login will work normally with fresh keys.
+                Your encryption keys will be kept on this device so you can still read your messages when you log back in.
               </p>
               <div style={{
-                background: '#2a1a1a', border: '1px solid #f8717133', borderRadius: '8px',
-                padding: '0.75rem', marginBottom: '1.25rem', fontSize: '0.8rem', color: '#f87171', lineHeight: 1.5,
+                background: '#1a2a1a', border: '1px solid #4ade8033', borderRadius: '8px',
+                padding: '0.75rem', marginBottom: '1.25rem', fontSize: '0.8rem', color: '#4ade80', lineHeight: 1.5,
               }}>
-                🔑 This action is irreversible. Your message history on this device will become unreadable.
+                � Your message history will remain accessible on this device after re-login.
               </div>
               <div style={{ display: 'flex', gap: '0.75rem' }}>
                 <button

@@ -54,11 +54,18 @@ export function useMessages(conversationId, myUserId) {
 
     if (!conversationId) { setMessages([]); setHasMore(false); return; }
 
-    // Show cached messages immediately if available
+    // Show cached messages immediately if available, otherwise clear old messages
+    // to prevent the previous conversation's messages from bleeding through.
     const cached = getCachedMessages(conversationId);
     if (cached) {
       setMessages(cached.messages);
       setHasMore(cached.hasMore);
+    } else {
+      // CRITICAL: Clear messages from the previous conversation immediately.
+      // Without this, old messages stay visible until the new ones load (or forever
+      // if key setup fails), causing the "all convos show the same messages" bug.
+      setMessages([]);
+      setHasMore(false);
     }
 
     setLoading(!cached); // Only show loading spinner if no cache
@@ -82,9 +89,18 @@ export function useMessages(conversationId, myUserId) {
         const decrypted = await decryptBatch(rawMessages);
 
         if (isMounted.current && !cancelled) {
-          setMessages(decrypted);
+          // Merge: keep any messages that arrived via socket while we were loading
+          // (e.g. optimistic sends or real-time echoes) that aren't in the fetch result.
+          setMessages((prev) => {
+            const fetchedIds = new Set(decrypted.map((m) => m.id));
+            // Messages in prev that are NOT in the fetched set — they arrived
+            // after the fetch started (optimistic sends, socket echoes).
+            const extras = prev.filter((m) => !fetchedIds.has(m.id));
+            const merged = [...decrypted, ...extras];
+            setCachedMessages(conversationId, merged, more);
+            return merged;
+          });
           setHasMore(more);
-          setCachedMessages(conversationId, decrypted, more);
         }
       } catch (err) {
         console.error('Failed to load messages:', err);

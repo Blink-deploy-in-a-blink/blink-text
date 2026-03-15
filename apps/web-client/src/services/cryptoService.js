@@ -250,11 +250,34 @@ async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 
     || await loadKeyFromSecureStore(`ephemeral-${conversationId}`);
 
   if (storedPrivate) {
-    // We already published our ephemeral key — reuse the private half.
+    // We have a stored private key — but verify our public key is still on the server.
+    // If the server was reset or key_exchange_data cleared, we need to re-publish.
     ephemeralPair = { privateKey: storedPrivate };
     ephemeralPrivateKeys.set(conversationId, storedPrivate);
+    console.log('[crypto] Found stored ephemeral key for', conversationId.slice(0, 8), 'priv.x=', storedPrivate?.x?.slice(0, 12));
+
+    // Check if our entry exists on the server
+    try {
+      const exchangeData = await getKeyExchange(conversationId);
+      const myEntry = exchangeData.find((e) => e.userId === myUserId);
+      if (!myEntry) {
+        console.warn('[crypto] Our public key missing from server for', conversationId.slice(0, 8), '— re-generating fresh keypair');
+        // Our public key is gone from the server. The stored private key is useless
+        // because no peer can find the corresponding public key to derive with.
+        // Generate a completely fresh pair.
+        ephemeralPair = await engine.generateECDHKey();
+        ephemeralPrivateKeys.set(conversationId, ephemeralPair.privateKey);
+        await saveKeyToSecureStore(`ephemeral-${conversationId}`, ephemeralPair.privateKey);
+        await storeKeyExchange(conversationId, deviceId, ephemeralPair.publicKey);
+        sendKeyExchange(conversationId, myUserId, deviceId, ephemeralPair.publicKey);
+        console.log('[crypto] Re-published fresh key for', conversationId.slice(0, 8), 'pub.x=', ephemeralPair.publicKey?.x?.slice(0, 12));
+      }
+    } catch (err) {
+      console.warn('[crypto] Could not verify server key state:', err.message);
+    }
   } else {
     ephemeralPair = await engine.generateECDHKey();
+    console.log('[crypto] Generated NEW ephemeral key for', conversationId.slice(0, 8), 'pub.x=', ephemeralPair.publicKey?.x?.slice(0, 12), 'priv.x=', ephemeralPair.privateKey?.x?.slice(0, 12));
 
     // Store in memory immediately so completeKeyExchangeFromSocket can use it
     // even if the socket event arrives before IndexedDB write completes
@@ -285,32 +308,24 @@ async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 
     sendKeyExchange(conversationId, myUserId, deviceId, ephemeralPair.publicKey);
   }
 
-  // If we already have a valid conversation key, just verify it's still fresh
+  // If we already have a valid conversation key, we're done.
+  // We do NOT re-derive just because the peer published a new key —
+  // doing so would break decryption of existing messages that were
+  // encrypted with the current key.  Re-keying only happens when
+  // neither side has a key yet (first setup) or when explicitly
+  // triggered after a logout/re-login cycle.
   if (conversationKeys.has(conversationId)) {
-    // Still do one check to see if peer re-keyed
-    try {
-      const exchangeData = await getKeyExchange(conversationId);
-      const peerEntry = _findLatestPeerEntry(exchangeData, myUserId);
-      if (peerEntry) {
-        const peerFingerprint = JSON.stringify(peerEntry.ephemeralPublicKey);
-        const existingFingerprint = conversationKeyFingerprints.get(conversationId);
-        if (existingFingerprint !== peerFingerprint) {
-          console.warn('[crypto] Peer re-keyed for', conversationId, '— re-deriving conversation key');
-          await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
-        }
-      }
-    } catch {
-      // Non-critical — we already have a key
-    }
     return;
   }
 
   // Try to find the peer's ephemeral key, with retries
   for (let i = 0; i <= maxRetries; i++) {
     const exchangeData = await getKeyExchange(conversationId);
+    console.log('[crypto] key_exchange_data for', conversationId.slice(0, 8), ':', exchangeData.map(e => ({ user: e.userId.slice(0, 8), device: e.deviceId.slice(0, 8), x: e.ephemeralPublicKey?.x?.slice(0, 12), createdAt: e.createdAt })));
     const peerEntry = _findLatestPeerEntry(exchangeData, myUserId);
 
     if (peerEntry) {
+      console.log('[crypto] Selected peer entry:', peerEntry.userId.slice(0, 8), 'device:', peerEntry.deviceId.slice(0, 8), 'pub.x=', peerEntry.ephemeralPublicKey?.x?.slice(0, 12));
       await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);
       return;
     }
@@ -328,11 +343,9 @@ async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 
  * Always re-derives if the peer's key is different from what we used last time.
  */
 export async function completeKeyExchangeFromSocket(conversationId, theirEphemeralPublicKey) {
-  const peerFingerprint = JSON.stringify(theirEphemeralPublicKey);
-  const existingFingerprint = conversationKeyFingerprints.get(conversationId);
-
-  // Skip only if we already derived with this exact key
-  if (conversationKeys.has(conversationId) && existingFingerprint === peerFingerprint) return;
+  // If we already have a working conversation key, don't re-derive.
+  // Re-deriving with a new peer key would break decryption of existing messages.
+  if (conversationKeys.has(conversationId)) return;
 
   // Try in-memory first (avoids race), then fall back to IndexedDB
   const ephemeralPrivateKey = ephemeralPrivateKeys.get(conversationId)
@@ -342,15 +355,16 @@ export async function completeKeyExchangeFromSocket(conversationId, theirEphemer
     return;
   }
 
-  if (existingFingerprint && existingFingerprint !== peerFingerprint) {
-    console.warn('[crypto] Peer re-keyed via socket for', conversationId, '— re-deriving');
-  }
-
   await _deriveAndStore(conversationId, ephemeralPrivateKey, theirEphemeralPublicKey);
 }
 
 async function _deriveAndStore(conversationId, myPrivateKey, theirPublicKey) {
+  console.log('[crypto] _deriveAndStore', conversationId.slice(0, 8),
+    'myPriv.x=', myPrivateKey?.x?.slice(0, 12),
+    'theirPub.x=', theirPublicKey?.x?.slice(0, 12));
   const key = await engine.deriveConversationKeyFromExchange(myPrivateKey, theirPublicKey, conversationId);
+  const keyHex = Array.from(key.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+  console.log('[crypto] Derived key prefix:', keyHex, 'for', conversationId.slice(0, 8));
   conversationKeys.set(conversationId, key);
   // Store a fingerprint so we can detect when the peer re-keys
   conversationKeyFingerprints.set(conversationId, JSON.stringify(theirPublicKey));
@@ -384,8 +398,10 @@ export function getDeviceId() {
 }
 
 /**
- * Wipe all crypto state — called on explicit logout.
- * Clears in-memory keys, IndexedDB secure store, and device ID from localStorage.
+ * Wipe session-level crypto state — called on explicit logout.
+ * Clears in-memory keys but PRESERVES IndexedDB keys (identity, ECDH, ephemeral)
+ * so that old messages can still be decrypted after re-login on the same device.
+ * Only clears the device ID from localStorage so a fresh device is registered.
  */
 export async function clearAllCryptoKeys() {
   conversationKeys.clear();
@@ -395,5 +411,7 @@ export async function clearAllCryptoKeys() {
   ecdhKeypair = null;
   deviceId = null;
   localStorage.removeItem('blink-device-id');
-  await clearSecureStore();
+  // NOTE: IndexedDB keys are intentionally NOT cleared.
+  // They will be reloaded on next initializeIdentity() call,
+  // preserving the ability to decrypt old messages.
 }
