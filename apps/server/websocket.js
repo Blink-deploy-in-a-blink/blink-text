@@ -98,10 +98,12 @@ function registerSocketHandlers(io) {
         const messageId = payload.id || uuidv4();
         const timestamp = Date.now();
         const replyToId = (msg && msg.replyToId) || null;
+        const messageType = (msg && msg.messageType) || 'text';
+        const mediaId = (msg && msg.mediaId) || null;
 
         db.prepare(
-          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp);
+          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp, message_type, media_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp, messageType, mediaId);
 
         const message = {
           id: messageId,
@@ -111,6 +113,8 @@ function registerSocketHandlers(io) {
           replyToId,
           edited: false,
           payload: { ciphertext, iv, version: version || 'v1' },
+          messageType,
+          mediaId,
         };
 
         io.to(conversationId).emit('message', message);

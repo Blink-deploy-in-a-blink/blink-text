@@ -2,7 +2,7 @@
  * Browser crypto provider using the Web Crypto API (globalThis.crypto.subtle).
  * All methods return Promises to match the CryptoProvider interface.
  */
-import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload } from '../types.js';
+import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload, EncryptedBinaryPayload } from '../types.js';
 
 const subtle = globalThis.crypto.subtle;
 
@@ -90,6 +90,19 @@ export class BrowserProvider implements CryptoProvider {
     const ivBuf = base64ToBuf(payload.iv);
     const plainBuf = await subtle.decrypt({ name: 'AES-GCM', iv: ivBuf as unknown as BufferSource }, aesKey, ciphertextBuf as unknown as BufferSource);
     return new TextDecoder().decode(plainBuf);
+  }
+
+  async encryptBinary(conversationKey: Uint8Array, data: Uint8Array): Promise<EncryptedBinaryPayload> {
+    const aesKey = await subtle.importKey('raw', conversationKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['encrypt']);
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const ciphertextBuf = await subtle.encrypt({ name: 'AES-GCM', iv: iv as unknown as BufferSource }, aesKey, data as unknown as BufferSource);
+    return { encrypted: new Uint8Array(ciphertextBuf), iv };
+  }
+
+  async decryptBinary(conversationKey: Uint8Array, payload: EncryptedBinaryPayload): Promise<Uint8Array> {
+    const aesKey = await subtle.importKey('raw', conversationKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['decrypt']);
+    const plainBuf = await subtle.decrypt({ name: 'AES-GCM', iv: payload.iv as unknown as BufferSource }, aesKey, payload.encrypted as unknown as BufferSource);
+    return new Uint8Array(plainBuf);
   }
 
   async signData(privateKeyJwk: JsonWebKey, data: string): Promise<string> {

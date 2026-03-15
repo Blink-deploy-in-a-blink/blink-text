@@ -13,6 +13,7 @@ const conversationRoutes = require('./routes/conversations');
 const keysRoutes = require('./routes/keys');
 const devicesRoutes = require('./routes/devices');
 const usersRoutes = require('./routes/users');
+const mediaRoutes = require('./routes/media');
 const { registerSocketHandlers } = require('./websocket');
 
 const app = express();
@@ -66,6 +67,7 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/keys', keysRoutes);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/media', mediaRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));

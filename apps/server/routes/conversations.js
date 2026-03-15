@@ -149,7 +149,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     if (before) {
       // Load older messages before the cursor timestamp
       rows = db.prepare(`
-        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id
         FROM messages
         WHERE conversation_id = ?
           AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
@@ -162,7 +162,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     } else {
       // Load the latest messages
       rows = db.prepare(`
-        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id
         FROM messages
         WHERE conversation_id = ?
           AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
@@ -186,6 +186,8 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
         iv: row.iv,
         version: row.version,
       },
+      messageType: row.message_type || 'text',
+      mediaId: row.media_id || null,
     }));
 
     // hasMore: true if we got exactly `limit` rows (more might exist)

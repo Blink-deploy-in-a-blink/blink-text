@@ -91,3 +91,38 @@ export const deleteAccount = (password, deleteConversations = false) =>
 
 export const refreshToken = () =>
   api.post('/api/auth/refresh').then((r) => r.data);
+
+/**
+ * Upload encrypted media binary to the server.
+ * @param {string} conversationId
+ * @param {Uint8Array} encryptedData - the encrypted binary data
+ * @param {string} ivBase64 - base64-encoded IV
+ * @returns {Promise<{ mediaId: string, fileSize: number }>}
+ */
+export const uploadMedia = (conversationId, encryptedData, ivBase64) => {
+  const formData = new FormData();
+  formData.append('conversationId', conversationId);
+  formData.append('iv', ivBase64);
+  formData.append('file', new Blob([encryptedData]), 'media.enc');
+  return api.post('/api/media/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    maxBodyLength: 110 * 1024 * 1024,
+    maxContentLength: 110 * 1024 * 1024,
+  }).then((r) => r.data);
+};
+
+/**
+ * Download encrypted media binary from the server.
+ * @param {string} mediaId
+ * @returns {Promise<{ data: Uint8Array, iv: string, version: string }>}
+ */
+export const downloadMedia = async (mediaId) => {
+  const response = await api.get(`/api/media/${mediaId}`, {
+    responseType: 'arraybuffer',
+  });
+  return {
+    data: new Uint8Array(response.data),
+    iv: response.headers['x-media-iv'],
+    version: response.headers['x-media-version'] || 'v1',
+  };
+};

@@ -45,6 +45,14 @@ export interface ECDHKeyPair {
 }
 
 /**
+ * Encrypted binary payload returned by encryptBinary / consumed by decryptBinary.
+ */
+export interface EncryptedBinaryPayload {
+  encrypted: Uint8Array; // raw AES-256-GCM ciphertext (includes GCM auth tag)
+  iv: Uint8Array;        // 12-byte random IV
+}
+
+/**
  * Interface that all crypto providers must implement.
  * All methods are async to accommodate both browser (Web Crypto) and Node environments.
  */
@@ -79,6 +87,18 @@ export interface CryptoProvider {
    * Returns the original plaintext string.
    */
   decryptMessage(conversationKey: Uint8Array, payload: EncryptedPayload): Promise<string>;
+
+  /**
+   * Encrypt raw binary data with AES-256-GCM.
+   * Returns the encrypted bytes and IV as Uint8Arrays (no base64 overhead).
+   */
+  encryptBinary(conversationKey: Uint8Array, data: Uint8Array): Promise<EncryptedBinaryPayload>;
+
+  /**
+   * Decrypt raw binary data with AES-256-GCM.
+   * Returns the original bytes.
+   */
+  decryptBinary(conversationKey: Uint8Array, payload: EncryptedBinaryPayload): Promise<Uint8Array>;
 
   /**
    * Sign arbitrary data with an ECDSA P-256 private key.

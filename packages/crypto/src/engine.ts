@@ -4,7 +4,7 @@
  * Wrap any CryptoProvider to get a consistent interface.
  * Application code should use CryptoEngine rather than calling providers directly.
  */
-import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload, EncryptedMessage, KeyExchangePayload } from './types.js';
+import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload, EncryptedBinaryPayload, EncryptedMessage, KeyExchangePayload } from './types.js';
 
 export class CryptoEngine {
   constructor(private readonly provider: CryptoProvider) {}
@@ -31,6 +31,14 @@ export class CryptoEngine {
 
   decryptMessage(conversationKey: Uint8Array, payload: EncryptedPayload): Promise<string> {
     return this.provider.decryptMessage(conversationKey, payload);
+  }
+
+  encryptBinary(conversationKey: Uint8Array, data: Uint8Array): Promise<EncryptedBinaryPayload> {
+    return this.provider.encryptBinary(conversationKey, data);
+  }
+
+  decryptBinary(conversationKey: Uint8Array, payload: EncryptedBinaryPayload): Promise<Uint8Array> {
+    return this.provider.decryptBinary(conversationKey, payload);
   }
 
   signData(privateKeyJwk: JsonWebKey, data: string): Promise<string> {

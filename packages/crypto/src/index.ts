@@ -7,6 +7,7 @@ export type {
   CryptoProvider,
   EncryptedMessage,
   EncryptedPayload,
+  EncryptedBinaryPayload,
   KeyExchangePayload,
   IdentityKeyPair,
   ECDHKeyPair,

@@ -39,12 +39,15 @@ export function leaveConversation(conversationId) {
  * @param {string} conversationId
  * @param {string} senderId
  * @param {{ ciphertext: string, iv: string, version: string }} payload
+ * @param {string|null} replyToId
+ * @param {string} [messageType='text'] - 'text', 'image', 'video', or 'voice'
+ * @param {string|null} [mediaId=null] - media ID for non-text messages
  * @returns {Promise<{ success: boolean, message?: object }>}
  */
-export function sendMessage(id, conversationId, senderId, payload, replyToId = null) {
+export function sendMessage(id, conversationId, senderId, payload, replyToId = null, messageType = 'text', mediaId = null) {
   return new Promise((resolve, reject) => {
     if (!socket) return reject(new Error('Socket not connected'));
-    const msg = { id, conversationId, senderId, timestamp: Date.now(), payload, replyToId };
+    const msg = { id, conversationId, senderId, timestamp: Date.now(), payload, replyToId, messageType, mediaId };
     socket.emit('send_message', msg, (ack) => {
       if (ack?.error) reject(new Error(ack.error));
       else resolve(ack);

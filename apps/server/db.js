@@ -76,12 +76,31 @@ db.exec(`
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     PRIMARY KEY (message_id, user_id)
   );
+
+  CREATE TABLE IF NOT EXISTS media (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    iv TEXT NOT NULL,
+    version TEXT NOT NULL DEFAULT 'v1',
+    file_size INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `);
 
 // Safe migrations: ALTER TABLE only if column doesn't exist yet
 const userColumns = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
 if (!userColumns.includes('deleted_at')) {
   db.exec("ALTER TABLE users ADD COLUMN deleted_at INTEGER DEFAULT NULL");
+}
+
+const messageColumns = db.prepare("PRAGMA table_info(messages)").all().map(c => c.name);
+if (!messageColumns.includes('message_type')) {
+  db.exec("ALTER TABLE messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text'");
+}
+if (!messageColumns.includes('media_id')) {
+  db.exec("ALTER TABLE messages ADD COLUMN media_id TEXT DEFAULT NULL");
 }
 
 module.exports = db;

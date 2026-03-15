@@ -381,6 +381,29 @@ export async function encryptForConversation(conversationId, plaintext) {
 }
 
 /**
+ * Encrypt binary data (image/video/voice) for a given conversation.
+ * Returns { encrypted: Uint8Array, iv: Uint8Array }.
+ */
+export async function encryptMediaForConversation(conversationId, data) {
+  const key = conversationKeys.get(conversationId);
+  if (!key) throw new Error(`No conversation key for ${conversationId}. Run setupConversationKey first.`);
+  return engine.encryptBinary(key, data);
+}
+
+/**
+ * Decrypt binary media data for a given conversation.
+ * @param {string} conversationId
+ * @param {Uint8Array} encrypted - encrypted binary data
+ * @param {Uint8Array} iv - initialization vector
+ * @returns {Promise<Uint8Array>} decrypted binary data
+ */
+export async function decryptMediaForConversation(conversationId, encrypted, iv) {
+  const key = conversationKeys.get(conversationId);
+  if (!key) throw new Error(`No conversation key for ${conversationId}`);
+  return engine.decryptBinary(key, { encrypted, iv });
+}
+
+/**
  * Decrypt an incoming EncryptedMessage payload.
  */
 export async function decryptConversationMessage(conversationId, encryptedPayload) {

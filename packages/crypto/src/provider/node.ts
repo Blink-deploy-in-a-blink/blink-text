@@ -4,7 +4,7 @@
  * the CryptoProvider interface (even though the underlying Node APIs are sync).
  */
 import * as nodeCrypto from 'node:crypto';
-import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload } from '../types.js';
+import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload, EncryptedBinaryPayload } from '../types.js';
 
 const HKDF_INFO = Buffer.from('blink-text-v1', 'utf8');
 const AES_KEY_LENGTH = 32; // 256-bit
@@ -73,6 +73,27 @@ export class NodeProvider implements CryptoProvider {
     const decipher = nodeCrypto.createDecipheriv('aes-256-gcm', keyBuf, ivBuf);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+  }
+
+  async encryptBinary(conversationKey: Uint8Array, data: Uint8Array): Promise<EncryptedBinaryPayload> {
+    const keyBuf = Buffer.from(conversationKey);
+    const iv = nodeCrypto.randomBytes(12);
+    const cipher = nodeCrypto.createCipheriv('aes-256-gcm', keyBuf, iv);
+    const encrypted = Buffer.concat([cipher.update(Buffer.from(data)), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const combined = Buffer.concat([encrypted, tag]);
+    return { encrypted: new Uint8Array(combined), iv: new Uint8Array(iv) };
+  }
+
+  async decryptBinary(conversationKey: Uint8Array, payload: EncryptedBinaryPayload): Promise<Uint8Array> {
+    const keyBuf = Buffer.from(conversationKey);
+    const ivBuf = Buffer.from(payload.iv);
+    const combined = Buffer.from(payload.encrypted);
+    const tag = combined.subarray(combined.length - 16);
+    const encrypted = combined.subarray(0, combined.length - 16);
+    const decipher = nodeCrypto.createDecipheriv('aes-256-gcm', keyBuf, ivBuf);
+    decipher.setAuthTag(tag);
+    return new Uint8Array(Buffer.concat([decipher.update(encrypted), decipher.final()]));
   }
 
   async signData(privateKeyJwk: JsonWebKey, data: string): Promise<string> {

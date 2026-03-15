@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { getMessages, deleteMessage as apiDeleteMessage } from '../services/api.js';
+import { getMessages, deleteMessage as apiDeleteMessage, uploadMedia } from '../services/api.js';
 import { getSocket, joinConversation, leaveConversation, sendMessage } from '../services/socket.js';
 import {
   setupConversationKey,
   encryptForConversation,
+  encryptMediaForConversation,
   decryptConversationMessage,
   hasConversationKey,
 } from '../services/cryptoService.js';
@@ -250,6 +251,70 @@ export function useMessages(conversationId, myUserId) {
     await sendMessage(id, conversationId, myUserId, payload, replyToId);
   }, [conversationId, myUserId]);
 
+  // Send a media message (image, video, or voice)
+  const sendMediaMsg = useCallback(async (file, messageType, replyToId = null) => {
+    if (!conversationId) return;
+
+    // Ensure we have a conversation key
+    if (!hasConversationKey(conversationId)) {
+      await setupConversationKey(conversationId, myUserId, { maxRetries: 6, retryDelay: 500 });
+    }
+    if (!hasConversationKey(conversationId)) {
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (hasConversationKey(conversationId)) break;
+      }
+    }
+    if (!hasConversationKey(conversationId)) {
+      throw new Error('Could not establish encryption with the other user.');
+    }
+
+    // Read the file as ArrayBuffer
+    const arrayBuffer = await file.arrayBuffer();
+    const fileBytes = new Uint8Array(arrayBuffer);
+
+    // Encrypt the file binary
+    const { encrypted, iv } = await encryptMediaForConversation(conversationId, fileBytes);
+
+    // Base64-encode IV for upload
+    let binary = '';
+    for (let i = 0; i < iv.byteLength; i++) binary += String.fromCharCode(iv[i]);
+    const ivBase64 = btoa(binary);
+
+    // Upload encrypted file to server
+    const { mediaId } = await uploadMedia(conversationId, encrypted, ivBase64);
+
+    // Encrypt metadata as the message payload (text portion)
+    const metadata = JSON.stringify({
+      fileName: file.name || (messageType === 'voice' ? 'voice-note.webm' : 'media'),
+      mimeType: file.type || 'application/octet-stream',
+      fileSize: file.size,
+    });
+    const payload = await encryptForConversation(conversationId, metadata);
+    const id = uuidv4();
+
+    // Optimistic: show the message locally
+    const optimisticMsg = {
+      id,
+      conversationId,
+      senderId: myUserId,
+      timestamp: Date.now(),
+      replyToId: replyToId || null,
+      edited: false,
+      payload,
+      plaintext: metadata,
+      messageType,
+      mediaId,
+      _optimistic: true,
+    };
+    appendCachedMessage(conversationId, optimisticMsg);
+    if (isMounted.current) {
+      setMessages((prev) => [...prev, optimisticMsg]);
+    }
+
+    await sendMessage(id, conversationId, myUserId, payload, replyToId, messageType, mediaId);
+  }, [conversationId, myUserId]);
+
   const deleteMsg = useCallback(async (messageId, mode = 'for_me') => {
     if (!conversationId) return;
     removeCachedMessage(conversationId, messageId);
@@ -285,5 +350,5 @@ export function useMessages(conversationId, myUserId) {
     }
   }, [conversationId, myUserId]);
 
-  return { messages, loading, loadingMore, hasMore, loadMore, sendMessage: sendMsg, deleteMessage: deleteMsg, editMessage: editMsg };
+  return { messages, loading, loadingMore, hasMore, loadMore, sendMessage: sendMsg, sendMediaMessage: sendMediaMsg, deleteMessage: deleteMsg, editMessage: editMsg };
 }
