@@ -140,7 +140,7 @@ function MessengerView({ user, logout }) {
     return () => { socket.off('new_conversation', handleNewConversation); };
   }, [user.id]);
 
-  const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, deleteMessage, editMessage } = useMessages(
+  const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, sendMediaMessage, deleteMessage, editMessage } = useMessages(
     activeConversation?.id || null,
     user.id
   );
@@ -184,6 +184,15 @@ function MessengerView({ user, logout }) {
       setReplyTo(null);
     } catch (err) {
       console.error('Send failed:', err);
+    }
+  };
+
+  const handleSendMedia = async (file, messageType, replyToId) => {
+    try {
+      await sendMediaMessage(file, messageType, replyToId);
+      setReplyTo(null);
+    } catch (err) {
+      console.error('Send media failed:', err);
     }
   };
 
@@ -239,6 +248,7 @@ function MessengerView({ user, logout }) {
           />
           <MessageInput
             onSend={handleSend}
+            onSendMedia={handleSendMedia}
             onSaveEdit={handleSaveEdit}
             disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
             replyTo={replyTo}
