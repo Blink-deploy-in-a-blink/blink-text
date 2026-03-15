@@ -29,6 +29,10 @@ export function joinConversation(conversationId) {
   if (socket) socket.emit('join_conversation', { conversationId });
 }
 
+export function leaveConversation(conversationId) {
+  if (socket) socket.emit('leave_conversation', { conversationId });
+}
+
 /**
  * Send an encrypted message over the socket.
  * @param {string} id - UUID for the message

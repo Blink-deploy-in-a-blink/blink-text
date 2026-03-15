@@ -16,6 +16,10 @@ const conversationKeyFingerprints = new Map();
 // conversationId -> privateKey object
 const ephemeralPrivateKeys = new Map();
 
+// Per-conversation setup lock to prevent concurrent calls from racing.
+// conversationId -> Promise  (resolves when the in-flight setup finishes)
+const setupLocks = new Map();
+
 let identityKeypair = null;
 let ecdhKeypair = null;
 let deviceId = null;
@@ -186,6 +190,9 @@ async function _migrateEphemeralKeys() {
  * If the peer hasn't published their key yet, retries a few times.
  * Always checks whether the peer has re-keyed and re-derives if so.
  *
+ * A per-conversation lock prevents concurrent calls (e.g. background preloader
+ * and useMessages) from racing and overwriting each other's ephemeral keys.
+ *
  * @param {string} conversationId
  * @param {string} myUserId
  * @param {object} [options]
@@ -193,6 +200,43 @@ async function _migrateEphemeralKeys() {
  * @param {number} [options.retryDelay=400] - Base delay in ms between retries
  */
 export async function setupConversationKey(conversationId, myUserId, { maxRetries = 3, retryDelay = 400 } = {}) {
+  // Wait for any in-progress setup for this same conversation to finish first.
+  let existingLock = setupLocks.get(conversationId);
+  while (existingLock) {
+    await existingLock;
+    existingLock = setupLocks.get(conversationId);
+  }
+
+  // After waiting, the previous call may have already established the key.
+  if (conversationKeys.has(conversationId)) return;
+
+  let releaseLock;
+  const lock = new Promise((r) => { releaseLock = r; });
+  setupLocks.set(conversationId, lock);
+
+  try {
+    await _doSetupConversationKey(conversationId, myUserId, { maxRetries, retryDelay });
+  } finally {
+    setupLocks.delete(conversationId);
+    releaseLock();
+  }
+}
+
+/**
+ * Pick the most-recent peer key exchange entry (Issue 2.3).
+ * Sorts by createdAt descending so that stale entries from old devices
+ * don't shadow the latest one.
+ */
+function _findLatestPeerEntry(exchangeData, myUserId) {
+  return exchangeData
+    .filter((e) => e.userId !== myUserId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
+}
+
+/**
+ * Internal implementation — always called under the per-conversation lock.
+ */
+async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 3, retryDelay = 400 } = {}) {
   if (!deviceId) throw new Error('Device not initialized. Call initializeIdentity() first.');
 
   // Always join the socket room so we can receive key_exchange events
@@ -246,7 +290,7 @@ export async function setupConversationKey(conversationId, myUserId, { maxRetrie
     // Still do one check to see if peer re-keyed
     try {
       const exchangeData = await getKeyExchange(conversationId);
-      const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
+      const peerEntry = _findLatestPeerEntry(exchangeData, myUserId);
       if (peerEntry) {
         const peerFingerprint = JSON.stringify(peerEntry.ephemeralPublicKey);
         const existingFingerprint = conversationKeyFingerprints.get(conversationId);
@@ -264,7 +308,7 @@ export async function setupConversationKey(conversationId, myUserId, { maxRetrie
   // Try to find the peer's ephemeral key, with retries
   for (let i = 0; i <= maxRetries; i++) {
     const exchangeData = await getKeyExchange(conversationId);
-    const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
+    const peerEntry = _findLatestPeerEntry(exchangeData, myUserId);
 
     if (peerEntry) {
       await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);

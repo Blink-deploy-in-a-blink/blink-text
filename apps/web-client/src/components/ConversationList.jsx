@@ -68,7 +68,7 @@ const s = {
   },
 };
 
-const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser, isMobile }, ref) {
+const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser, isMobile, getUnreadCount }, ref) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
@@ -208,7 +208,18 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
             style={s.item(conv.id === activeConversationId)}
             onClick={() => onSelect(conv)}
           >
-            <div style={s.name}>{getDisplayName(conv)}</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={s.name}>{getDisplayName(conv)}</div>
+              {getUnreadCount && getUnreadCount(conv.id) > 0 && (
+                <span style={{
+                  background: '#6366f1', color: '#fff', borderRadius: '10px',
+                  fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.45rem',
+                  minWidth: '18px', textAlign: 'center', lineHeight: '1.3',
+                }}>
+                  {getUnreadCount(conv.id) > 99 ? '99+' : getUnreadCount(conv.id)}
+                </span>
+              )}
+            </div>
             <div style={s.sub}>{conv.type === 'direct_message' ? 'Direct' : 'Group'}</div>
           </div>
         ))}

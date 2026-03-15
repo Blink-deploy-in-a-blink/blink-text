@@ -107,6 +107,22 @@ router.post(
   }
 );
 
+// POST /api/auth/refresh — issue a fresh token while the current one is still valid
+router.post('/refresh', authenticateToken, (req, res) => {
+  try {
+    // Verify user still exists and is not deleted
+    const user = db.prepare('SELECT id, username, deleted_at FROM users WHERE id = ?').get(req.user.id);
+    if (!user || user.deleted_at) {
+      return res.status(401).json({ error: 'Account no longer exists' });
+    }
+    const token = signToken({ id: user.id, username: user.username });
+    return res.json({ token });
+  } catch (err) {
+    console.error('Token refresh error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // PUT /api/auth/password
 router.put(
   '/password',
@@ -178,10 +194,17 @@ router.delete(
       });
       deleteAccount();
 
-      // Notify connected peers via socket
+      // Notify only users who share a conversation with the deleted user (Issue 5.2)
       const io = req.app.get('io');
       if (io) {
-        io.emit('user_deleted', { userId: req.user.id });
+        const peers = db.prepare(`
+          SELECT DISTINCT cp2.user_id FROM conversation_participants cp1
+          JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id
+          WHERE cp1.user_id = ? AND cp2.user_id != ?
+        `).all(req.user.id, req.user.id);
+        for (const peer of peers) {
+          io.to(peer.user_id).emit('user_deleted', { userId: req.user.id });
+        }
       }
 
       return res.json({ message: 'Account deleted' });

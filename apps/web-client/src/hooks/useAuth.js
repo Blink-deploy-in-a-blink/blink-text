@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { login as apiLogin, register as apiRegister } from '../services/api.js';
+import { login as apiLogin, register as apiRegister, refreshToken as apiRefreshToken } from '../services/api.js';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { initializeIdentity, clearAllCryptoKeys } from '../services/cryptoService.js';
 
@@ -56,6 +56,15 @@ export function useAuth() {
     if (token) {
       sessionStorage.setItem('blink-session', '1'); // keep sentinel alive across refreshes
       connectSocket(token);
+      // Refresh the token so the 30-day window restarts every time the app is opened
+      apiRefreshToken()
+        .then(({ token: newToken }) => {
+          localStorage.setItem('blink-token', newToken);
+        })
+        .catch(() => {
+          // Token may have expired or been invalidated — auto-logout will trigger
+          // via the API interceptor if needed, nothing else to do here.
+        });
       initializeIdentity()
         .then(() => setReady(true))
         .catch((err) => {

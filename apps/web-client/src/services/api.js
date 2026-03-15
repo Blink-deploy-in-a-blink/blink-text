@@ -88,3 +88,6 @@ export const changePassword = (currentPassword, newPassword) =>
 
 export const deleteAccount = (password, deleteConversations = false) =>
   api.delete('/api/auth/account', { data: { password, deleteConversations } }).then((r) => r.data);
+
+export const refreshToken = () =>
+  api.post('/api/auth/refresh').then((r) => r.data);

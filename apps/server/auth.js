@@ -36,12 +36,16 @@ function authenticateToken(req, res, next) {
 }
 
 /**
- * Signs a JWT payload with a 24-hour expiry.
+ * Signs a JWT payload with a 30-day expiry.
+ * Crypto keys (ephemeral ECDH keys, device ID) are preserved across sessions
+ * so old messages remain decryptable after re-login.  Only an explicit sign-out
+ * wipes those keys.  The long-lived token avoids forcing re-login and losing
+ * decryption ability.
  * @param {Object} payload
  * @returns {string} signed JWT
  */
 function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
 }
 
 module.exports = { authenticateToken, signToken };

@@ -30,7 +30,15 @@ function registerSocketHandlers(io) {
     // Join a personal room so we can send events directly to this user
     socket.join(userId);
 
-    socket.broadcast.emit('user_connected', { userId, username });
+    // Emit presence events only to users who share at least one conversation (Issue 5.1)
+    const peers = db.prepare(`
+      SELECT DISTINCT cp2.user_id FROM conversation_participants cp1
+      JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id
+      WHERE cp1.user_id = ? AND cp2.user_id != ?
+    `).all(userId, userId);
+    for (const peer of peers) {
+      io.to(peer.user_id).emit('user_connected', { userId, username });
+    }
 
     socket.on('join_conversation', ({ conversationId }) => {
       if (!conversationId || typeof conversationId !== 'string') return;
@@ -46,6 +54,13 @@ function registerSocketHandlers(io) {
 
       socket.join(conversationId);
       console.log(`[WS] ${username} joined room ${conversationId}`);
+    });
+
+    // Leave a conversation room — called when the user switches away (Issue 1.2)
+    socket.on('leave_conversation', ({ conversationId }) => {
+      if (!conversationId || typeof conversationId !== 'string') return;
+      socket.leave(conversationId);
+      console.log(`[WS] ${username} left room ${conversationId}`);
     });
 
     // send_message: validate, persist, relay encrypted message using EncryptedMessage format
@@ -193,7 +208,15 @@ function registerSocketHandlers(io) {
 
     socket.on('disconnect', () => {
       console.log(`[WS] User disconnected: ${username} (${userId})`);
-      socket.broadcast.emit('user_disconnected', { userId, username });
+      // Emit disconnect only to conversation peers (Issue 5.1)
+      const disconnectPeers = db.prepare(`
+        SELECT DISTINCT cp2.user_id FROM conversation_participants cp1
+        JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id
+        WHERE cp1.user_id = ? AND cp2.user_id != ?
+      `).all(userId, userId);
+      for (const peer of disconnectPeers) {
+        io.to(peer.user_id).emit('user_disconnected', { userId, username });
+      }
     });
   });
 }

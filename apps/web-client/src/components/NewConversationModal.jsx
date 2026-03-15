@@ -51,30 +51,53 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
     setError('');
     setLoading(true);
     try {
-      // The API takes user IDs; for simplicity this modal accepts a username and
-      // we look it up by fetching conversations to find matching participants.
-      // In a real app you'd have a /api/users/search endpoint.
       if (!recipientUsername.trim()) {
         setError('Please enter a username');
         setLoading(false);
         return;
       }
 
-      // Look up the username to get the user ID
-      const users = await searchUsers(recipientUsername.trim());
-      const matchedUser = users.find(
-        (u) => u.username.toLowerCase() === recipientUsername.trim().toLowerCase()
-      );
-      if (!matchedUser) {
-        setError('Username not found');
-        setLoading(false);
-        return;
+      if (type === 'group_chat') {
+        // Group chats: split comma-separated usernames, resolve each (Issue 4.1)
+        const usernames = recipientUsername.split(',').map((u) => u.trim()).filter(Boolean);
+        if (usernames.length < 1) {
+          setError('Enter at least one username');
+          setLoading(false);
+          return;
+        }
+        const participantIds = new Set();
+        for (const uname of usernames) {
+          const users = await searchUsers(uname);
+          const matched = users.find(
+            (u) => u.username.toLowerCase() === uname.toLowerCase()
+          );
+          if (!matched) {
+            setError(`Username not found: ${uname}`);
+            setLoading(false);
+            return;
+          }
+          participantIds.add(matched.id);
+        }
+        const participants = Array.from(participantIds);
+        const conv = await createConversation(type, participants, groupName || undefined);
+        onCreated(conv);
+        onClose();
+      } else {
+        // Direct message: single recipient
+        const users = await searchUsers(recipientUsername.trim());
+        const matchedUser = users.find(
+          (u) => u.username.toLowerCase() === recipientUsername.trim().toLowerCase()
+        );
+        if (!matchedUser) {
+          setError('Username not found');
+          setLoading(false);
+          return;
+        }
+        const participants = [matchedUser.id];
+        const conv = await createConversation(type, participants, groupName || undefined);
+        onCreated(conv);
+        onClose();
       }
-
-      const participants = [matchedUser.id];
-      const conv = await createConversation(type, participants, groupName || undefined);
-      onCreated(conv);
-      onClose();
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Failed to create conversation');
     } finally {

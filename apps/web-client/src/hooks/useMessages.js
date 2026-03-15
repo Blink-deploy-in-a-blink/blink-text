@@ -1,12 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { getMessages, deleteMessage as apiDeleteMessage } from '../services/api.js';
-import { getSocket, joinConversation, sendMessage } from '../services/socket.js';
+import { getSocket, joinConversation, leaveConversation, sendMessage } from '../services/socket.js';
 import {
   setupConversationKey,
   encryptForConversation,
   decryptConversationMessage,
-  completeKeyExchangeFromSocket,
   hasConversationKey,
 } from '../services/cryptoService.js';
 import {
@@ -23,6 +22,7 @@ export function useMessages(conversationId, myUserId) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const isMounted = useRef(true);
+  const prevConversationId = useRef(null);
 
   useEffect(() => {
     isMounted.current = true;
@@ -46,6 +46,12 @@ export function useMessages(conversationId, myUserId) {
 
   // Load message history when conversation changes (latest page)
   useEffect(() => {
+    // Leave the previous conversation room when switching (Issue 1.2)
+    if (prevConversationId.current && prevConversationId.current !== conversationId) {
+      leaveConversation(prevConversationId.current);
+    }
+    prevConversationId.current = conversationId;
+
     if (!conversationId) { setMessages([]); setHasMore(false); return; }
 
     // Show cached messages immediately if available
@@ -113,7 +119,7 @@ export function useMessages(conversationId, myUserId) {
     }
   }, [conversationId, loadingMore, hasMore, messages, decryptBatch]);
 
-  // Socket event listeners
+  // Socket event listeners — key_exchange is now handled globally in App.jsx (Issue 2.2)
   useEffect(() => {
     if (!conversationId) return;
     const socket = getSocket();
@@ -127,44 +133,27 @@ export function useMessages(conversationId, myUserId) {
         const decryptedMsg = { ...msg, plaintext };
         appendCachedMessage(conversationId, decryptedMsg);
         if (isMounted.current) {
-          setMessages((prev) => [...prev, decryptedMsg]);
+          setMessages((prev) => {
+            // Single-pass: replace optimistic placeholder or append new
+            const idx = prev.findIndex((m) => m.id === decryptedMsg.id);
+            if (idx !== -1) {
+              const updated = [...prev];
+              updated[idx] = decryptedMsg;
+              return updated;
+            }
+            return [...prev, decryptedMsg];
+          });
         }
       } catch (err) {
         console.warn('[useMessages] Failed to decrypt incoming message:', msg.id, err);
         const failedMsg = { ...msg, plaintext: '[unable to decrypt]' };
         appendCachedMessage(conversationId, failedMsg);
         if (isMounted.current) {
-          setMessages((prev) => [...prev, failedMsg]);
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === failedMsg.id)) return prev;
+            return [...prev, failedMsg];
+          });
         }
-      }
-    };
-
-    const onKeyExchange = async ({ conversationId: cid, ephemeralPublicKey }) => {
-      if (cid !== conversationId) return;
-      await completeKeyExchangeFromSocket(conversationId, ephemeralPublicKey);
-
-      // Now that we have the key, fetch and decrypt messages
-      if (!isMounted.current) return;
-      if (!hasConversationKey(conversationId)) return;
-      try {
-        const { messages: rawMessages, hasMore: more } = await getMessages(conversationId, { limit: 50 });
-        const decrypted = await Promise.all(
-          rawMessages.map(async (msg) => {
-            try {
-              const plaintext = await decryptConversationMessage(conversationId, msg.payload);
-              return { ...msg, plaintext };
-            } catch {
-              return { ...msg, plaintext: '[unable to decrypt]' };
-            }
-          })
-        );
-        if (isMounted.current) {
-          setMessages(decrypted);
-          setHasMore(more);
-          setCachedMessages(conversationId, decrypted, more);
-        }
-      } catch {
-        // If re-fetch fails, leave existing messages as-is
       }
     };
 
@@ -192,18 +181,17 @@ export function useMessages(conversationId, myUserId) {
     };
 
     socket.on('message', onMessage);
-    socket.on('key_exchange', onKeyExchange);
     socket.on('message_deleted', onMessageDeleted);
     socket.on('message_edited', onMessageEdited);
 
     return () => {
       socket.off('message', onMessage);
-      socket.off('key_exchange', onKeyExchange);
       socket.off('message_deleted', onMessageDeleted);
       socket.off('message_edited', onMessageEdited);
     };
   }, [conversationId]);
 
+  // Optimistic send — show message locally before server confirms (Issue 3.1)
   const sendMsg = useCallback(async (plaintext, replyToId = null) => {
     if (!conversationId) return;
 
@@ -225,6 +213,24 @@ export function useMessages(conversationId, myUserId) {
     }
     const payload = await encryptForConversation(conversationId, plaintext);
     const id = uuidv4();
+
+    // Optimistic: show the message locally before the server roundtrip
+    const optimisticMsg = {
+      id,
+      conversationId,
+      senderId: myUserId,
+      timestamp: Date.now(),
+      replyToId: replyToId || null,
+      edited: false,
+      payload,
+      plaintext,
+      _optimistic: true, // marker; replaced when server echo arrives
+    };
+    appendCachedMessage(conversationId, optimisticMsg);
+    if (isMounted.current) {
+      setMessages((prev) => [...prev, optimisticMsg]);
+    }
+
     await sendMessage(id, conversationId, myUserId, payload, replyToId);
   }, [conversationId, myUserId]);
 

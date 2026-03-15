@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
 import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
-import { getSocket } from './services/socket.js';
-import { completeKeyExchangeFromSocket } from './services/cryptoService.js';
+import { getSocket, joinConversation } from './services/socket.js';
+import { completeKeyExchangeFromSocket, setupConversationKey, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
+import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
+import { getConversations } from './services/api.js';
 import Login from './components/Login.jsx';
 import Register from './components/Register.jsx';
 import ConversationList from './components/ConversationList.jsx';
@@ -40,21 +42,47 @@ function MessengerView({ user, logout }) {
   const [replyTo, setReplyTo] = useState(null);
   const [editingMsg, setEditingMsg] = useState(null);
   const conversationListRef = useRef(null);
+  // Force re-render key for unread badges
+  const [, setUnreadTick] = useState(0);
 
   // Background preload all conversations' keys + messages
   useBackgroundPreloader(user.id);
 
-  // Global key_exchange listener — handles key exchanges for ANY conversation,
-  // not just the active one. This ensures that when the peer opens a conversation
-  // and publishes their key, we derive the shared secret even if we're looking
-  // at a different chat. The useMessages hook handles key_exchange for the active conv.
+  // Listen for unread count changes to re-render conversation list badges
+  useEffect(() => {
+    return onUnreadChange(() => setUnreadTick((t) => t + 1));
+  }, []);
+
+  // Validate activeConversation on mount — clear if stale (Issue 4.4)
+  useEffect(() => {
+    if (!activeConversation) return;
+    (async () => {
+      try {
+        const conversations = await getConversations();
+        const found = conversations.find((c) => c.id === activeConversation.id);
+        if (!found) {
+          // Conversation no longer exists or user was removed
+          setActiveConversation(null);
+          localStorage.removeItem('blink-active-conv');
+        } else {
+          // Update with fresh data (e.g. has_deleted_participant may have changed)
+          const names = (found.participant_usernames || '').split(',').filter((n) => n !== user.username);
+          setActiveConversation({ ...found, displayName: found.name || names.join(', ') || 'Conversation' });
+        }
+      } catch {
+        // If API fails, keep the cached version
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Unified key_exchange listener — handles key exchanges for ALL conversations (Issue 2.2).
+  // A single global handler eliminates the gap that occurred when two split listeners
+  // (useMessages + App.jsx global) were removed and re-registered during conversation switches.
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
 
-    const handleGlobalKeyExchange = async ({ conversationId, ephemeralPublicKey }) => {
-      // The active conversation's key_exchange is handled by useMessages, skip it here
-      if (conversationId === activeConversation?.id) return;
+    const handleKeyExchange = async ({ conversationId, ephemeralPublicKey }) => {
       try {
         await completeKeyExchangeFromSocket(conversationId, ephemeralPublicKey);
       } catch (err) {
@@ -62,9 +90,55 @@ function MessengerView({ user, logout }) {
       }
     };
 
-    socket.on('key_exchange', handleGlobalKeyExchange);
-    return () => { socket.off('key_exchange', handleGlobalKeyExchange); };
+    socket.on('key_exchange', handleKeyExchange);
+    return () => { socket.off('key_exchange', handleKeyExchange); };
+  }, []);
+
+  // Global message listener — catches messages for NON-ACTIVE conversations so
+  // they are decrypted and appended to the message cache + unread count.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleGlobalMessage = async (msg) => {
+      // The active conversation is handled by useMessages — skip it here
+      if (msg.conversationId === activeConversation?.id) return;
+      // Track unread regardless of whether we can decrypt
+      incrementUnread(msg.conversationId);
+      if (!hasConversationKey(msg.conversationId)) return;
+      try {
+        const plaintext = await decryptConversationMessage(msg.conversationId, msg.payload);
+        appendCachedMessage(msg.conversationId, { ...msg, plaintext });
+      } catch (err) {
+        console.warn('[global] Failed to decrypt message for', msg.conversationId, err.message);
+        appendCachedMessage(msg.conversationId, { ...msg, plaintext: '[unable to decrypt]' });
+      }
+    };
+
+    socket.on('message', handleGlobalMessage);
+    return () => { socket.off('message', handleGlobalMessage); };
   }, [activeConversation?.id]);
+
+  // When a new_conversation event arrives, auto-join the room and start key exchange (Issue 1.4)
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleNewConversation = async ({ conversation }) => {
+      if (!conversation?.id) return;
+      // Join the socket room immediately so we receive messages and key_exchange events
+      joinConversation(conversation.id);
+      // Initiate key exchange (fire-and-forget, 0 retries)
+      try {
+        await setupConversationKey(conversation.id, user.id, { maxRetries: 0, retryDelay: 0 });
+      } catch (err) {
+        console.warn('[global] Failed to preload new conversation key:', conversation.id, err.message);
+      }
+    };
+
+    socket.on('new_conversation', handleNewConversation);
+    return () => { socket.off('new_conversation', handleNewConversation); };
+  }, [user.id]);
 
   const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, deleteMessage, editMessage } = useMessages(
     activeConversation?.id || null,
@@ -88,14 +162,16 @@ function MessengerView({ user, logout }) {
     return () => { socket.off('user_deleted', handleUserDeleted); };
   }, [activeConversation]);
 
-  const handleSelectConversation = (conv) => {
+  const handleSelectConversation = useCallback((conv) => {
     const names = (conv.participant_usernames || '').split(',').filter((n) => n !== user.username);
     const selected = { ...conv, displayName: conv.name || names.join(', ') || 'Conversation' };
     setActiveConversation(selected);
     localStorage.setItem('blink-active-conv', JSON.stringify(selected));
     setReplyTo(null);
     setEditingMsg(null);
-  };
+    // Clear unread count when switching to this conversation
+    clearUnread(conv.id);
+  }, [user.username]);
 
   const handleNewConversation = (conv) => {
     conversationListRef.current?.refresh();
@@ -142,6 +218,7 @@ function MessengerView({ user, logout }) {
           onLogout={logout}
           currentUser={user}
           isMobile={isMobile}
+          getUnreadCount={getUnreadCount}
         />
       )}
       {showChat && (
