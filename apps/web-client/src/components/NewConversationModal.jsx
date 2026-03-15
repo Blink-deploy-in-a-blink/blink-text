@@ -65,7 +65,7 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
           setLoading(false);
           return;
         }
-        const participants = [];
+        const participantIds = new Set();
         for (const uname of usernames) {
           const users = await searchUsers(uname);
           const matched = users.find(
@@ -76,10 +76,9 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
             setLoading(false);
             return;
           }
-          if (!participants.includes(matched.id)) {
-            participants.push(matched.id);
-          }
+          participantIds.add(matched.id);
         }
+        const participants = Array.from(participantIds);
         const conv = await createConversation(type, participants, groupName || undefined);
         onCreated(conv);
         onClose();

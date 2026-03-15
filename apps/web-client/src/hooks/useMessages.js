@@ -134,10 +134,12 @@ export function useMessages(conversationId, myUserId) {
         appendCachedMessage(conversationId, decryptedMsg);
         if (isMounted.current) {
           setMessages((prev) => {
-            // Deduplicate — skip if already present (e.g. reconnect, optimistic send echo)
-            if (prev.some((m) => m.id === decryptedMsg.id)) {
-              // Replace optimistic placeholder with the server-confirmed version
-              return prev.map((m) => m.id === decryptedMsg.id ? decryptedMsg : m);
+            // Single-pass: replace optimistic placeholder or append new
+            const idx = prev.findIndex((m) => m.id === decryptedMsg.id);
+            if (idx !== -1) {
+              const updated = [...prev];
+              updated[idx] = decryptedMsg;
+              return updated;
             }
             return [...prev, decryptedMsg];
           });
