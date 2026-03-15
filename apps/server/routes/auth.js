@@ -194,10 +194,17 @@ router.delete(
       });
       deleteAccount();
 
-      // Notify connected peers via socket
+      // Notify only users who share a conversation with the deleted user (Issue 5.2)
       const io = req.app.get('io');
       if (io) {
-        io.emit('user_deleted', { userId: req.user.id });
+        const peers = db.prepare(`
+          SELECT DISTINCT cp2.user_id FROM conversation_participants cp1
+          JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id
+          WHERE cp1.user_id = ? AND cp2.user_id != ?
+        `).all(req.user.id, req.user.id);
+        for (const peer of peers) {
+          io.to(peer.user_id).emit('user_deleted', { userId: req.user.id });
+        }
       }
 
       return res.json({ message: 'Account deleted' });

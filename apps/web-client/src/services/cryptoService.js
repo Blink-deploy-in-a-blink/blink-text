@@ -223,6 +223,17 @@ export async function setupConversationKey(conversationId, myUserId, { maxRetrie
 }
 
 /**
+ * Pick the most-recent peer key exchange entry (Issue 2.3).
+ * Sorts by createdAt descending so that stale entries from old devices
+ * don't shadow the latest one.
+ */
+function _findLatestPeerEntry(exchangeData, myUserId) {
+  return exchangeData
+    .filter((e) => e.userId !== myUserId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
+}
+
+/**
  * Internal implementation — always called under the per-conversation lock.
  */
 async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 3, retryDelay = 400 } = {}) {
@@ -279,7 +290,7 @@ async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 
     // Still do one check to see if peer re-keyed
     try {
       const exchangeData = await getKeyExchange(conversationId);
-      const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
+      const peerEntry = _findLatestPeerEntry(exchangeData, myUserId);
       if (peerEntry) {
         const peerFingerprint = JSON.stringify(peerEntry.ephemeralPublicKey);
         const existingFingerprint = conversationKeyFingerprints.get(conversationId);
@@ -297,7 +308,7 @@ async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 
   // Try to find the peer's ephemeral key, with retries
   for (let i = 0; i <= maxRetries; i++) {
     const exchangeData = await getKeyExchange(conversationId);
-    const peerEntry = exchangeData.find((e) => e.userId !== myUserId);
+    const peerEntry = _findLatestPeerEntry(exchangeData, myUserId);
 
     if (peerEntry) {
       await _deriveAndStore(conversationId, ephemeralPair.privateKey, peerEntry.ephemeralPublicKey);

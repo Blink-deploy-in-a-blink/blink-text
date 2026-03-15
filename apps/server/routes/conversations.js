@@ -85,16 +85,29 @@ router.post(
 
       const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
 
+      // Fetch enriched conversation data including participant usernames (Issue 4.3)
+      const enrichedConversation = db.prepare(`
+        SELECT c.id, c.type, c.name, c.created_at,
+               GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
+               GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
+               0 AS has_deleted_participant
+        FROM conversations c
+        JOIN conversation_participants cp ON cp.conversation_id = c.id
+        JOIN users u ON u.id = cp.user_id
+        WHERE c.id = ?
+        GROUP BY c.id
+      `).get(conversationId);
+
       // Notify other participants in real-time
       const io = req.app.get('io');
       if (io) {
         const otherParticipants = allParticipants.filter((uid) => uid !== req.user.id);
         for (const uid of otherParticipants) {
-          io.to(uid).emit('new_conversation', { conversation });
+          io.to(uid).emit('new_conversation', { conversation: enrichedConversation || conversation });
         }
       }
 
-      return res.status(201).json({ conversation });
+      return res.status(201).json({ conversation: enrichedConversation || conversation });
     } catch (err) {
       console.error('Create conversation error:', err);
       return res.status(500).json({ error: 'Internal server error' });
