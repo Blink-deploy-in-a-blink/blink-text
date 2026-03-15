@@ -127,14 +127,21 @@ export function useMessages(conversationId, myUserId) {
         const decryptedMsg = { ...msg, plaintext };
         appendCachedMessage(conversationId, decryptedMsg);
         if (isMounted.current) {
-          setMessages((prev) => [...prev, decryptedMsg]);
+          setMessages((prev) => {
+            // Deduplicate — skip if already present (e.g. reconnect, broadcast to sender)
+            if (prev.some((m) => m.id === decryptedMsg.id)) return prev;
+            return [...prev, decryptedMsg];
+          });
         }
       } catch (err) {
         console.warn('[useMessages] Failed to decrypt incoming message:', msg.id, err);
         const failedMsg = { ...msg, plaintext: '[unable to decrypt]' };
         appendCachedMessage(conversationId, failedMsg);
         if (isMounted.current) {
-          setMessages((prev) => [...prev, failedMsg]);
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === failedMsg.id)) return prev;
+            return [...prev, failedMsg];
+          });
         }
       }
     };

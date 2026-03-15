@@ -3,7 +3,8 @@ import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
 import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
 import { getSocket } from './services/socket.js';
-import { completeKeyExchangeFromSocket } from './services/cryptoService.js';
+import { completeKeyExchangeFromSocket, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
+import { appendCachedMessage } from './services/messageCache.js';
 import Login from './components/Login.jsx';
 import Register from './components/Register.jsx';
 import ConversationList from './components/ConversationList.jsx';
@@ -64,6 +65,30 @@ function MessengerView({ user, logout }) {
 
     socket.on('key_exchange', handleGlobalKeyExchange);
     return () => { socket.off('key_exchange', handleGlobalKeyExchange); };
+  }, [activeConversation?.id]);
+
+  // Global message listener — catches messages for NON-ACTIVE conversations so
+  // they are decrypted and appended to the message cache.  Without this, messages
+  // arriving while the user views a different chat would be silently dropped and
+  // only appear after a full server re-fetch.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleGlobalMessage = async (msg) => {
+      // The active conversation is handled by useMessages — skip it here
+      if (msg.conversationId === activeConversation?.id) return;
+      if (!hasConversationKey(msg.conversationId)) return;
+      try {
+        const plaintext = await decryptConversationMessage(msg.conversationId, msg.payload);
+        appendCachedMessage(msg.conversationId, { ...msg, plaintext });
+      } catch {
+        appendCachedMessage(msg.conversationId, { ...msg, plaintext: '[unable to decrypt]' });
+      }
+    };
+
+    socket.on('message', handleGlobalMessage);
+    return () => { socket.off('message', handleGlobalMessage); };
   }, [activeConversation?.id]);
 
   const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, deleteMessage, editMessage } = useMessages(

@@ -107,6 +107,22 @@ router.post(
   }
 );
 
+// POST /api/auth/refresh — issue a fresh token while the current one is still valid
+router.post('/refresh', authenticateToken, (req, res) => {
+  try {
+    // Verify user still exists and is not deleted
+    const user = db.prepare('SELECT id, username, deleted_at FROM users WHERE id = ?').get(req.user.id);
+    if (!user || user.deleted_at) {
+      return res.status(401).json({ error: 'Account no longer exists' });
+    }
+    const token = signToken({ id: user.id, username: user.username });
+    return res.json({ token });
+  } catch (err) {
+    console.error('Token refresh error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // PUT /api/auth/password
 router.put(
   '/password',

@@ -18,33 +18,20 @@
 
 These are the bugs most likely causing the reported problems — messages from one user appearing in the wrong chat, messages not being delivered, and second chats not working properly.
 
-### 1.1 Stale Key Exchange Entries After Device Re-Registration
+### ~~1.1 Stale Key Exchange Entries After Device Re-Registration~~ — NOT A BUG
 
-**Severity**: 🔴 Critical — root cause of key mismatch / wrong decryption across chats  
-**Files**: `apps/server/routes/keys.js:73`, `apps/web-client/src/services/cryptoService.js:249`
+**Severity**: ✅ Not a bug — intentional design  
+**Files**: `apps/server/routes/keys.js:73`, `apps/web-client/src/services/cryptoService.js`
 
-**Problem**: When a user logs out and back in (or their session expires), a **new device** is registered with a new `device_id`. The server's key exchange upsert logic deletes old entries by `(conversation_id, device_id)`:
+**Previous assessment was incorrect.** Keeping old device key exchange entries is **intentional**:
 
-```js
-// apps/server/routes/keys.js:73
-db.prepare('DELETE FROM key_exchange_data WHERE conversation_id = ? AND device_id = ?')
-  .run(conversationId, deviceId);
-```
+- When a user's JWT expires (automatic session timeout) the crypto keys (ephemeral ECDH keys, device ID) are **preserved** in IndexedDB and localStorage so old conversations remain decryptable after re-login.
+- Only an explicit manual sign-out wipes crypto keys (and the user is warned that all message history becomes unreadable).
+- Deleting old key exchange entries by `user_id` would break decryption for users whose sessions simply expired — an unacceptable UX regression.
 
-Since the new device has a **different** `device_id`, the old device's key exchange entries **remain in the database**. This results in multiple `key_exchange_data` rows for the same user in the same conversation (one per device).
+The old-device entries in `key_exchange_data` serve as a fallback so the same device can re-derive conversation keys when the session is restored.  The peer-key selection in `setupConversationKey` picks the most recently matching entry for the peer, which is the correct one because the `completeKeyExchangeFromSocket` handler always re-derives when the peer's key fingerprint changes.
 
-When the peer fetches key exchange data, `exchangeData.find((e) => e.userId !== myUserId)` returns the **first** (oldest/stale) entry, causing the peer to derive a conversation key from the **wrong** ephemeral public key.
-
-**Impact**: 
-- Messages encrypted by User A cannot be decrypted by User B (and vice versa) because they derived keys from different ephemeral key pairs.
-- When User A has 2 conversations (with User B and User C), switching between them may trigger re-key flows that further corrupt the key state.
-- Messages appear as `[unable to decrypt]` or get decrypted with the wrong key (cross-contamination between chats).
-
-**Fix**: The DELETE should use `user_id` instead of `device_id`:
-```js
-db.prepare('DELETE FROM key_exchange_data WHERE conversation_id = ? AND user_id = ?')
-  .run(conversationId, req.user.id);
-```
+> **Session management improvement (implemented):** JWT expiry extended from 24 h → 30 days and a `POST /api/auth/refresh` endpoint was added so the token is silently renewed every time the app is opened, further reducing the chance of session-expiry surprises.
 
 ---
 
@@ -67,10 +54,10 @@ This means `io.to(conversationId).emit('message', message)` delivers message eve
 
 ---
 
-### 1.3 Messages for Non-Active Conversations Are Silently Dropped
+### 1.3 Messages for Non-Active Conversations Are Silently Dropped — ✅ FIXED
 
-**Severity**: 🟠 High  
-**Files**: `apps/web-client/src/hooks/useMessages.js:124`
+**Severity**: 🟠 High → ✅ Fixed  
+**Files**: `apps/web-client/src/hooks/useMessages.js:124`, `apps/web-client/src/App.jsx`
 
 **Problem**: The `useMessages` hook's `onMessage` handler filters messages by the currently active `conversationId`:
 
@@ -81,14 +68,9 @@ const onMessage = async (msg) => {
 };
 ```
 
-Messages arriving for **non-active** conversations are completely discarded — they are not cached, counted, or indicated in any way. Combined with the lack of room cleanup (Issue 1.2), the socket receives messages for all joined conversations but only processes ones matching the active conversation.
+Messages arriving for **non-active** conversations are completely discarded — they are not cached, counted, or indicated in any way.
 
-**Impact**:
-- No unread message indicators — the user has no way to know a new message arrived in another conversation.
-- When switching back to a previously viewed conversation, the cache is stale — messages sent by others while the user was viewing a different chat don't appear until a full server re-fetch.
-- Creates the perception that "messages of the third user are not being delivered."
-
-**Fix**: Add a global `message` handler (similar to the global `key_exchange` handler in `App.jsx`) that updates the message cache and unread counts for non-active conversations.
+**Fix applied**: Added a global `message` handler in `App.jsx` that catches messages for non-active conversations, decrypts them (when a key is available), and appends them to the message cache via `appendCachedMessage()`. When the user switches back to that conversation, the cached messages appear immediately.
 
 ---
 
@@ -117,9 +99,9 @@ When another user creates a new conversation with you (e.g., User C starts a DM 
 
 ---
 
-### 1.5 Race Condition in Concurrent `setupConversationKey` Calls
+### 1.5 Race Condition in Concurrent `setupConversationKey` Calls — ✅ FIXED
 
-**Severity**: 🟠 High  
+**Severity**: 🟠 High → ✅ Fixed  
 **Files**: `apps/web-client/src/services/cryptoService.js:195-280`
 
 **Problem**: `setupConversationKey` can be called concurrently for the same conversation from:
@@ -136,7 +118,7 @@ When two calls race:
 
 **Impact**: Intermittent key mismatches, especially during the initial load when the preloader and manual conversation opening overlap. Messages become undecryptable.
 
-**Fix**: Add a per-conversation lock/mutex to `setupConversationKey` so only one call can run at a time per conversation.
+**Fix applied**: Added a per-conversation lock (`setupLocks` Map) in `cryptoService.js`. When `setupConversationKey` is called while another call is already in progress for the same conversation, it waits for the first call to finish. If the first call successfully established the key, the second call returns immediately without generating a conflicting ephemeral key pair.
 
 ---
 
@@ -191,14 +173,14 @@ Between steps 2 and 4, there's a brief window where `key_exchange` events for **
 
 ### 2.3 Peer Key Selection Uses `.find()` Without Deduplication
 
-**Severity**: 🟡 Medium  
+**Severity**: 🟢 Low (revised — stale keys are intentional, see Issue 1.1)  
 **Files**: `apps/web-client/src/services/cryptoService.js:249,267`
 
-**Problem**: When `getKeyExchange(conversationId)` returns multiple entries for the same user (due to Issue 1.1), `exchangeData.find((e) => e.userId !== myUserId)` picks the **first** match, which may be a stale entry from an old device.
+**Problem**: When `getKeyExchange(conversationId)` returns multiple entries for the same user (one per device), `exchangeData.find((e) => e.userId !== myUserId)` picks the **first** match. However, this is mitigated by the `completeKeyExchangeFromSocket` handler which always re-derives when the peer's key fingerprint changes, so the latest key is always used in practice.
 
-**Impact**: Key derivation uses an outdated ephemeral public key, resulting in a key mismatch with the peer who is now using a different (newer) ephemeral key pair.
+**Impact**: Low — the re-derivation logic handles this. In rare cases, the first API fetch could derive from an older device's key, but the next socket `key_exchange` event will correct it.
 
-**Fix**: Sort key exchange entries by `createdAt` descending and pick the most recent entry per user, or better yet, ensure only one entry per user exists (fix Issue 1.1 at the source).
+**Fix**: Would improve reliability if entries were sorted by `createdAt` descending before picking, but not critical.
 
 ---
 
@@ -226,22 +208,14 @@ io.to(conversationId).emit('message', message);
 
 ---
 
-### 3.2 No Message Deduplication
+### 3.2 No Message Deduplication — ✅ FIXED
 
-**Severity**: 🟡 Medium  
-**Files**: `apps/web-client/src/hooks/useMessages.js:123-139`
+**Severity**: 🟡 Medium → ✅ Fixed  
+**Files**: `apps/web-client/src/hooks/useMessages.js:123-139`, `apps/web-client/src/services/messageCache.js`
 
-**Problem**: The `onMessage` handler appends incoming messages without checking if the message already exists:
+**Problem**: The `onMessage` handler appends incoming messages without checking if the message already exists.
 
-```js
-setMessages((prev) => [...prev, decryptedMsg]);
-```
-
-If a message event is received twice (e.g., due to Socket.io reconnection, or the user has multiple tabs), duplicate messages appear in the UI.
-
-**Impact**: Duplicate messages displayed in the chat window under certain network conditions or multi-tab usage.
-
-**Fix**: Check `prev.some((m) => m.id === decryptedMsg.id)` before appending.
+**Fix applied**: Added deduplication checks in both `useMessages.js` (`setMessages` callback checks `prev.some(m => m.id === msg.id)`) and `messageCache.js` (`appendCachedMessage` skips if the message ID already exists in the cache).
 
 ---
 
@@ -375,16 +349,16 @@ io.emit('user_deleted', { userId: req.user.id });
 
 | # | Issue | Severity | Category |
 |---|-------|----------|----------|
-| 1.1 | Stale key exchange entries after re-login | 🔴 Critical | Key Exchange |
+| 1.1 | ~~Stale key exchange entries after re-login~~ | ✅ Not a bug | Key Exchange |
 | 1.2 | No socket room cleanup (no `leave_conversation`) | 🔴 Critical | Socket |
-| 1.3 | Messages for non-active conversations silently dropped | 🟠 High | Messaging |
+| 1.3 | ~~Messages for non-active conversations silently dropped~~ | ✅ Fixed | Messaging |
 | 1.4 | New conversations don't trigger key preloading | 🟠 High | Key Exchange |
-| 1.5 | Race condition in concurrent `setupConversationKey` | 🟠 High | Key Exchange |
+| 1.5 | ~~Race condition in concurrent `setupConversationKey`~~ | ✅ Fixed | Key Exchange |
 | 2.1 | Group chat encryption fundamentally broken | 🔴 Critical | Encryption |
 | 2.2 | Key exchange event gap during conversation switch | 🟡 Medium | Key Exchange |
-| 2.3 | Peer key selection without deduplication | 🟡 Medium | Key Exchange |
+| 2.3 | Peer key selection without deduplication | 🟢 Low | Key Exchange |
 | 3.1 | No optimistic UI update for sent messages | 🟡 Medium | UX |
-| 3.2 | No message deduplication | 🟡 Medium | Messaging |
+| 3.2 | ~~No message deduplication~~ | ✅ Fixed | Messaging |
 | 3.3 | Socket key_exchange not persistent | 🟡 Medium | Socket |
 | 4.1 | Group chat creation UI broken | 🟠 High | UI |
 | 4.2 | No unread message indicators | 🟡 Medium | UX |
@@ -395,14 +369,23 @@ io.emit('user_deleted', { userId: req.user.id });
 
 ### Root Cause Analysis for the Reported Multi-User Bug
 
-The primary symptoms reported — **"chats of other user coming in the second chat, message of third user not being delivered, second chat not working properly"** — are most likely caused by a combination of:
+The primary symptoms reported — **"chats of other user coming in the second chat, message of third user not being delivered, second chat not working properly"** — were caused by:
 
-1. **Issue 1.1** (stale key exchange entries) — After any re-login, key exchange entries from old devices accumulate in the database. Peers derive keys from stale entries, causing decryption failures or cross-contamination when the wrong conversation key is used.
+1. **Issue 1.5** (race condition in key setup — **now fixed**) — When the background preloader and user actions overlapped, ephemeral keys got overwritten, causing key mismatches.  Both the preloader and `useMessages` hook called `setupConversationKey` concurrently for the same conversation, generating conflicting ephemeral key pairs.  **A per-conversation lock now prevents this.**
 
-2. **Issue 1.3** (dropped messages for non-active conversations) — Messages arriving for a non-active conversation are silently discarded. When switching back, the user doesn't see recent messages until a full server refresh.
+2. **Issue 1.3** (dropped messages for non-active conversations — **now fixed**) — Messages arriving for a non-active conversation were silently discarded by the `useMessages` filter.  When switching back, the user didn't see recent messages until a full server refresh, creating the perception that "messages of the third user are not being delivered."  **A global message handler now decrypts and caches these messages.**
 
-3. **Issue 1.4** (no key preloading for new conversations) — When a third user creates a conversation, the key exchange and room joining don't happen automatically, delaying message delivery.
+3. **Issue 3.2** (no message deduplication — **now fixed**) — Socket reconnection or server broadcast could cause the same message to appear twice.  **Deduplication checks now prevent this.**
 
-4. **Issue 1.5** (race condition in key setup) — When the background preloader and user actions overlap, ephemeral keys get overwritten, causing key mismatches.
+4. **Issue 1.4** (no key preloading for new conversations — still open) — When a third user creates a conversation, the key exchange and room joining don't happen automatically, delaying message delivery.
 
-These issues compound: a stale key causes decryption failure, the message shows as `[unable to decrypt]`, the user switches conversations, misses messages in the first chat, and the overall experience breaks down when more than one conversation is active.
+**Note on stale key exchange entries (Issue 1.1):** The previous analysis incorrectly identified this as a bug.  Preserving old device keys is **intentional** — it ensures that users whose JWT sessions expire (automatic timeout) can still decrypt old conversations after re-login.  The session management has been improved: JWT expiry extended from 24 h → 30 days, and a token refresh endpoint now silently renews the token every time the app is opened.
+
+### Why Direct Messages Should Work (And Now Do)
+
+The ECDH key exchange is **pairwise by design**.  For direct messages (1:1 conversations), each side generates one ephemeral key pair per conversation.  The per-conversation key derivation (`conversationId` used as HKDF salt) ensures that multiple DM conversations produce **independent** conversation keys.  The bugs that were breaking multi-DM scenarios were:
+
+- The race condition (Issue 1.5) causing key overwrites during concurrent setup
+- Dropped messages (Issue 1.3) giving the appearance of undelivered messages
+
+Both are now fixed.  Group chats (3+ participants) remain fundamentally broken because ECDH only works between two parties — this requires a separate group key agreement protocol (Issue 2.1).

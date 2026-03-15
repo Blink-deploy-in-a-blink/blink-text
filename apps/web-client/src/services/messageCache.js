@@ -17,6 +17,8 @@ export function setCachedMessages(conversationId, messages, hasMore) {
 export function appendCachedMessage(conversationId, msg) {
   const entry = cache.get(conversationId);
   if (!entry) return;
+  // Deduplicate — avoid adding the same message twice (e.g. reconnect, multi-tab)
+  if (entry.messages.some((m) => m.id === msg.id)) return;
   entry.messages = [...entry.messages, msg];
   entry.timestamp = Date.now();
 }

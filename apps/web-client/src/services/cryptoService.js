@@ -16,6 +16,10 @@ const conversationKeyFingerprints = new Map();
 // conversationId -> privateKey object
 const ephemeralPrivateKeys = new Map();
 
+// Per-conversation setup lock to prevent concurrent calls from racing.
+// conversationId -> Promise  (resolves when the in-flight setup finishes)
+const setupLocks = new Map();
+
 let identityKeypair = null;
 let ecdhKeypair = null;
 let deviceId = null;
@@ -186,6 +190,9 @@ async function _migrateEphemeralKeys() {
  * If the peer hasn't published their key yet, retries a few times.
  * Always checks whether the peer has re-keyed and re-derives if so.
  *
+ * A per-conversation lock prevents concurrent calls (e.g. background preloader
+ * and useMessages) from racing and overwriting each other's ephemeral keys.
+ *
  * @param {string} conversationId
  * @param {string} myUserId
  * @param {object} [options]
@@ -193,6 +200,30 @@ async function _migrateEphemeralKeys() {
  * @param {number} [options.retryDelay=400] - Base delay in ms between retries
  */
 export async function setupConversationKey(conversationId, myUserId, { maxRetries = 3, retryDelay = 400 } = {}) {
+  // Wait for any in-progress setup for this same conversation to finish first.
+  while (setupLocks.has(conversationId)) {
+    await setupLocks.get(conversationId);
+  }
+
+  // After waiting, the previous call may have already established the key.
+  if (conversationKeys.has(conversationId)) return;
+
+  let releaseLock;
+  const lock = new Promise((r) => { releaseLock = r; });
+  setupLocks.set(conversationId, lock);
+
+  try {
+    await _doSetupConversationKey(conversationId, myUserId, { maxRetries, retryDelay });
+  } finally {
+    setupLocks.delete(conversationId);
+    releaseLock();
+  }
+}
+
+/**
+ * Internal implementation — always called under the per-conversation lock.
+ */
+async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 3, retryDelay = 400 } = {}) {
   if (!deviceId) throw new Error('Device not initialized. Call initializeIdentity() first.');
 
   // Always join the socket room so we can receive key_exchange events
