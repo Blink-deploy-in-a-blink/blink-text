@@ -35,22 +35,17 @@ The old-device entries in `key_exchange_data` serve as a fallback so the same de
 
 ---
 
-### 1.2 No Socket Room Cleanup (Missing `leave_conversation`)
+### 1.2 No Socket Room Cleanup (Missing `leave_conversation`) — ✅ FIXED
 
-**Severity**: 🔴 Critical  
-**Files**: `apps/server/websocket.js` (missing handler), `apps/web-client/src/services/socket.js` (missing function)
+**Severity**: 🔴 Critical → ✅ Fixed  
+**Files**: `apps/server/websocket.js`, `apps/web-client/src/services/socket.js`, `apps/web-client/src/hooks/useMessages.js`
 
-**Problem**: When a user opens a conversation, they join the corresponding Socket.io room via `join_conversation`. However, there is **no `leave_conversation` mechanism** — users accumulate room memberships across all conversations they've ever opened.
+**Problem**: When a user opens a conversation, they join the corresponding Socket.io room via `join_conversation`. However, there was **no `leave_conversation` mechanism** — users accumulated room memberships across all conversations they've ever opened.
 
-This means `io.to(conversationId).emit('message', message)` delivers message events for **all** joined conversations to the user's socket. While the client-side `useMessages` hook filters by `conversationId`, this creates several issues:
-
-**Impact**:
-- Unnecessary network traffic — every message for every joined room is sent to the socket, even if filtered client-side.
-- Server memory buildup — each socket maintains a set of all rooms it has joined.
-- All `key_exchange` events for past conversations are delivered, triggering unnecessary processing.
-- In high-traffic scenarios, this can degrade performance and cause event handler backlog.
-
-**Fix**: Add a `leave_conversation` socket event on the server and call it from the client when switching conversations.
+**Fix applied**:
+- Added `leave_conversation` socket event handler on the server that calls `socket.leave(conversationId)`.
+- Added `leaveConversation()` function in `socket.js` client service.
+- `useMessages` now calls `leaveConversation(prevConversationId)` when the user switches conversations, so room memberships are properly cleaned up.
 
 ---
 
@@ -74,28 +69,14 @@ Messages arriving for **non-active** conversations are completely discarded — 
 
 ---
 
-### 1.4 New Conversations Created by Others Don't Trigger Key Preloading
+### 1.4 New Conversations Created by Others Don't Trigger Key Preloading — ✅ FIXED
 
-**Severity**: 🟠 High  
-**Files**: `apps/web-client/src/hooks/useBackgroundPreloader.js:21`
+**Severity**: 🟠 High → ✅ Fixed  
+**Files**: `apps/web-client/src/App.jsx`
 
-**Problem**: The `useBackgroundPreloader` hook runs **once** on mount and sets `started.current = true`, preventing it from running again:
+**Problem**: The `useBackgroundPreloader` hook ran **once** on mount — new conversations created by others didn't trigger key exchange or socket room joining.
 
-```js
-if (!userId || started.current) return;
-started.current = true;
-```
-
-When another user creates a new conversation with you (e.g., User C starts a DM with User A), the `new_conversation` socket event triggers a conversation list refresh, but:
-- No `setupConversationKey` is called for the new conversation
-- No socket room is joined for the new conversation
-- The user won't receive real-time messages or key exchange events until they manually open the conversation
-
-**Impact**:
-- User A doesn't receive real-time messages from User C until they click on the conversation.
-- Key exchange for the new conversation is delayed, which can cause the "second chat not working properly" symptom.
-
-**Fix**: When a `new_conversation` event is received, also join the socket room and initiate key exchange for the new conversation.
+**Fix applied**: Added a `new_conversation` socket event handler in `App.jsx` that automatically joins the socket room and initiates key exchange (fire-and-forget, 0 retries) for any new conversation created by another user. The key will be established either immediately (if the peer is online) or when the user opens the conversation.
 
 ---
 
@@ -148,63 +129,38 @@ Messages encrypted by A (using the A↔B key) cannot be decrypted by C.
 
 ---
 
-### 2.2 Key Exchange Event Gap During Conversation Switch
+### 2.2 Key Exchange Event Gap During Conversation Switch — ✅ FIXED
 
-**Severity**: 🟡 Medium  
-**Files**: `apps/web-client/src/App.jsx:51-67`, `apps/web-client/src/hooks/useMessages.js:117-205`
+**Severity**: 🟡 Medium → ✅ Fixed  
+**Files**: `apps/web-client/src/App.jsx`, `apps/web-client/src/hooks/useMessages.js`
 
-**Problem**: Key exchange events are handled by two listeners:
-1. `useMessages` hook — handles `key_exchange` for the **active** conversation
-2. Global handler in `App.jsx` — handles `key_exchange` for **all other** conversations (skips active)
+**Problem**: Key exchange events were handled by two split listeners (useMessages for active, App.jsx global for others). During conversation switches, a brief gap existed where events for either conversation could be missed.
 
-When the active conversation changes, React cleanup runs before new effects are set up:
-1. Old `useMessages` handler removed (for old active conversation)
-2. Old global handler removed (which skipped old active conversation)
-3. New global handler registered (skips **new** active conversation)
-4. New `useMessages` handler registered (handles new active conversation)
-
-Between steps 2 and 4, there's a brief window where `key_exchange` events for **either** conversation could be missed.
-
-**Impact**: Occasional failure to complete key exchange, especially when switching conversations rapidly while peers are also opening conversations.
-
-**Fix**: Use a single global handler that processes all key exchange events, removing the split listener architecture.
+**Fix applied**: Replaced the split key_exchange listener architecture with a single unified global handler in `App.jsx`. The handler processes key_exchange events for **all** conversations without skipping the active one. The useMessages hook no longer registers its own key_exchange listener, eliminating the gap entirely.
 
 ---
 
-### 2.3 Peer Key Selection Uses `.find()` Without Deduplication
+### 2.3 Peer Key Selection Uses `.find()` Without Deduplication — ✅ FIXED
 
-**Severity**: 🟢 Low (revised — stale keys are intentional, see Issue 1.1)  
-**Files**: `apps/web-client/src/services/cryptoService.js:249,267`
+**Severity**: 🟢 Low → ✅ Fixed  
+**Files**: `apps/web-client/src/services/cryptoService.js`
 
-**Problem**: When `getKeyExchange(conversationId)` returns multiple entries for the same user (one per device), `exchangeData.find((e) => e.userId !== myUserId)` picks the **first** match. However, this is mitigated by the `completeKeyExchangeFromSocket` handler which always re-derives when the peer's key fingerprint changes, so the latest key is always used in practice.
+**Problem**: `exchangeData.find((e) => e.userId !== myUserId)` picked the **first** match without considering which entry was the most recent.
 
-**Impact**: Low — the re-derivation logic handles this. In rare cases, the first API fetch could derive from an older device's key, but the next socket `key_exchange` event will correct it.
-
-**Fix**: Would improve reliability if entries were sorted by `createdAt` descending before picking, but not critical.
+**Fix applied**: Added `_findLatestPeerEntry()` helper that filters by peer, sorts by `createdAt` descending, and picks the most recent entry. This ensures that stale entries from old devices don't shadow the latest one.
 
 ---
 
 ## 3. Socket / Real-Time Messaging Issues
 
-### 3.1 Sender Receives Their Own Message Back via `io.to()` Broadcast
+### 3.1 Sender Receives Their Own Message Back via `io.to()` Broadcast — ✅ FIXED
 
-**Severity**: 🟡 Medium  
-**Files**: `apps/server/websocket.js:101`
+**Severity**: 🟡 Medium → ✅ Fixed  
+**Files**: `apps/web-client/src/hooks/useMessages.js`
 
-**Problem**: The server uses `io.to(conversationId).emit('message', message)` which broadcasts to **all** sockets in the room, including the sender. The sender's only way to see their message in the UI is via this broadcast — there is no optimistic local update.
+**Problem**: The server uses `io.to(conversationId).emit('message', message)` which broadcasts to all sockets including the sender. Without optimistic local updates, users had to wait for the full roundtrip before seeing their message.
 
-```js
-// Server broadcasts to all, including sender
-io.to(conversationId).emit('message', message);
-```
-
-**Impact**:
-- Perceived latency — the user must wait for the round-trip (client → server → client) before seeing their own message.
-- If the network is slow, the chat feels unresponsive.
-
-**Fix**: Either:
-- Use `socket.to(conversationId).emit(...)` (excludes sender) and add an optimistic local message in the client, or
-- Keep `io.to()` but add an optimistic message on the client and deduplicate when the broadcast arrives.
+**Fix applied**: The `sendMsg` function now adds the message to the local state and cache **immediately** with an `_optimistic: true` marker before the server roundtrip. When the server echo arrives, the deduplication logic detects the same message ID and replaces the optimistic version with the server-confirmed one. This eliminates perceived latency.
 
 ---
 
@@ -219,129 +175,93 @@ io.to(conversationId).emit('message', message);
 
 ---
 
-### 3.3 `key_exchange` Socket Event Uses `socket.to()` But Has No Persistence Guarantee
+### 3.3 `key_exchange` Socket Event Uses `socket.to()` But Has No Persistence Guarantee — ACCEPTABLE
 
-**Severity**: 🟡 Medium  
+**Severity**: 🟡 Medium → ✅ Acceptable as-is  
 **Files**: `apps/server/websocket.js:121`
 
-**Problem**: The `key_exchange` socket event is forwarded to peers using `socket.to(conversationId).emit(...)`. If the peer is offline or not in the room, the event is lost. The key exchange data **is** persisted in the database (via the REST API), but the real-time socket notification is fire-and-forget.
+**Problem**: The `key_exchange` socket event is forwarded to peers using `socket.to(conversationId).emit(...)`. If the peer is offline or not in the room, the event is lost. The key exchange data **is** persisted in the database (via the REST API), so the socket notification is fire-and-forget.
 
-**Impact**: If User B publishes their ephemeral key while User A is offline, User A won't receive the socket event. User A must rely on the retry logic in `setupConversationKey` to poll the REST API. This works but adds latency to key establishment.
-
-**Fix**: This is acceptable as-is since the REST API serves as the persistent fallback. However, adding a "pending key exchange" queue that replays on reconnect would improve UX.
+**Assessment**: This is acceptable because:
+1. The REST API serves as the persistent fallback — `setupConversationKey` polls via `getKeyExchange()` with retries.
+2. The background preloader runs on app load and establishes keys for all existing conversations.
+3. New conversations now trigger automatic key exchange via the `new_conversation` handler (Issue 1.4 fix).
+4. The unified key_exchange handler (Issue 2.2 fix) ensures no events are missed while the app is connected.
 
 ---
 
 ## 4. UI & Client Logic Issues
 
-### 4.1 NewConversationModal Doesn't Support Multiple Participants for Group Chats
+### 4.1 NewConversationModal Doesn't Support Multiple Participants for Group Chats — ✅ FIXED
 
-**Severity**: 🟠 High  
-**Files**: `apps/web-client/src/components/NewConversationModal.jsx:64-74`
+**Severity**: 🟠 High → ✅ Fixed  
+**Files**: `apps/web-client/src/components/NewConversationModal.jsx`
 
-**Problem**: The modal's UI suggests comma-separated usernames for group chats:
-```jsx
-<label>{type === 'direct_message' ? 'Recipient Username' : 'Participant Usernames (comma-separated)'}</label>
-```
+**Problem**: The modal's UI suggested comma-separated usernames for group chats, but `handleCreate` only resolved a single username.
 
-But the `handleCreate` function only searches for and adds **one** user:
-```js
-const users = await searchUsers(recipientUsername.trim());
-const matchedUser = users.find(
-  (u) => u.username.toLowerCase() === recipientUsername.trim().toLowerCase()
-);
-const participants = [matchedUser.id]; // Only one participant!
-```
-
-**Impact**: Group chats can only be created with 2 participants (the creator + one other), despite the UI suggesting otherwise.
-
-**Fix**: Split the input by commas, search for each username individually, and collect all matched user IDs into the `participants` array.
+**Fix applied**: The `handleCreate` function now splits the input by commas for group chats, resolves each username individually via `searchUsers()`, and collects all matched user IDs into the `participants` array. If any username is not found, it shows a specific error message identifying the missing user.
 
 ---
 
-### 4.2 No Unread Message Indicators
+### 4.2 No Unread Message Indicators — ✅ FIXED
 
-**Severity**: 🟡 Medium  
-**Files**: `apps/web-client/src/components/ConversationList.jsx`
+**Severity**: 🟡 Medium → ✅ Fixed  
+**Files**: `apps/web-client/src/services/messageCache.js`, `apps/web-client/src/App.jsx`, `apps/web-client/src/components/ConversationList.jsx`
 
-**Problem**: The conversation list shows no indication of unread messages. Combined with Issue 1.3 (messages for non-active conversations are dropped), the user has no way to know when new messages arrive in other conversations.
+**Problem**: The conversation list showed no indication of unread messages.
 
-**Impact**: User must manually check each conversation for new messages, making multi-conversation usage frustrating.
-
-**Fix**: Add an unread count state per conversation, update it from a global `message` handler, and display badges in the conversation list.
-
----
-
-### 4.3 `new_conversation` Event Payload Lacks Display Data
-
-**Severity**: 🟢 Low  
-**Files**: `apps/server/routes/conversations.js:86-95`
-
-**Problem**: When notifying other participants of a new conversation, the server fetches only the raw conversation record:
-```js
-const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
-io.to(uid).emit('new_conversation', { conversation });
-```
-
-This object lacks `participant_usernames`, `participant_ids`, and `has_deleted_participant` fields that the client needs for display. The client works around this by calling `load()` to refresh the full list, but this is inefficient.
-
-**Impact**: Extra API call on every `new_conversation` event; brief flash of incomplete data.
-
-**Fix**: Include participant info in the `new_conversation` payload, or at minimum ensure the client-side `load()` is sufficient (it currently is, but it's wasteful).
+**Fix applied**: 
+- Added unread count tracking in `messageCache.js` (`incrementUnread`, `clearUnread`, `getUnreadCount`, `onUnreadChange`).
+- The global message handler in `App.jsx` calls `incrementUnread()` for any message arriving in a non-active conversation.
+- `handleSelectConversation` calls `clearUnread()` when the user switches to a conversation.
+- `ConversationList.jsx` displays purple badges with unread counts next to each conversation name.
+- A change listener triggers re-renders when unread counts change.
 
 ---
 
-### 4.4 `activeConversation` Stored in `localStorage` Can Become Stale
+### 4.3 `new_conversation` Event Payload Lacks Display Data — ✅ FIXED
 
-**Severity**: 🟢 Low  
-**Files**: `apps/web-client/src/App.jsx:33-38`
+**Severity**: 🟢 Low → ✅ Fixed  
+**Files**: `apps/server/routes/conversations.js`
 
-**Problem**: The active conversation is persisted to `localStorage` and restored on page load:
-```js
-const [activeConversation, setActiveConversation] = useState(() => {
-  const raw = localStorage.getItem('blink-active-conv');
-  return raw ? JSON.parse(raw) : null;
-});
-```
+**Problem**: The `new_conversation` event payload only contained the raw conversation record, lacking `participant_usernames`, `participant_ids`, and `has_deleted_participant` fields.
 
-If the conversation was deleted, the user was removed, or the peer deleted their account since the last session, the restored conversation object may have stale data (e.g., `has_deleted_participant: 0` when it should be `1`).
+**Fix applied**: The server now fetches an enriched conversation record (with JOINed participant usernames and IDs) before emitting the `new_conversation` event. The response to the conversation creator is also enriched.
 
-**Impact**: Brief display of outdated conversation state until the next API call refreshes the data.
+---
+
+### 4.4 `activeConversation` Stored in `localStorage` Can Become Stale — ✅ FIXED
+
+**Severity**: 🟢 Low → ✅ Fixed  
+**Files**: `apps/web-client/src/App.jsx`
+
+**Problem**: The active conversation was persisted to `localStorage` and restored on page load without validation. If the conversation was deleted or the user was removed, stale data would be displayed.
+
+**Fix applied**: On mount, `MessengerView` fetches the full conversation list and validates the stored `activeConversation`. If the conversation no longer exists (or the user was removed), it's cleared. If it does exist, the stored data is refreshed with the latest from the server (e.g. updated `has_deleted_participant` status).
 
 ---
 
 ## 5. Privacy & Security Concerns
 
-### 5.1 `user_connected` / `user_disconnected` Broadcast to All Users
+### 5.1 `user_connected` / `user_disconnected` Broadcast to All Users — ✅ FIXED
 
-**Severity**: 🟡 Medium  
-**Files**: `apps/server/websocket.js:33,196`
+**Severity**: 🟡 Medium → ✅ Fixed  
+**Files**: `apps/server/websocket.js`
 
-**Problem**: Connection and disconnection events are broadcast globally:
-```js
-socket.broadcast.emit('user_connected', { userId, username });
-socket.broadcast.emit('user_disconnected', { userId, username });
-```
+**Problem**: Connection and disconnection events were broadcast globally to all connected users.
 
-**Impact**: All connected users can see when any other user connects or disconnects, regardless of whether they share any conversation. This leaks presence information.
-
-**Fix**: Only emit presence events to users who share at least one conversation with the connecting/disconnecting user.
+**Fix applied**: Presence events are now scoped to users who share at least one conversation with the connecting/disconnecting user. A SQL query fetches distinct peer user IDs from `conversation_participants`, and events are emitted only to those users' personal rooms.
 
 ---
 
-### 5.2 `user_deleted` Event Broadcast to All Connected Users
+### 5.2 `user_deleted` Event Broadcast to All Connected Users — ✅ FIXED
 
-**Severity**: 🟡 Medium  
-**Files**: `apps/server/routes/auth.js:184`
+**Severity**: 🟡 Medium → ✅ Fixed  
+**Files**: `apps/server/routes/auth.js`
 
-**Problem**: When a user deletes their account, the event is broadcast globally:
-```js
-io.emit('user_deleted', { userId: req.user.id });
-```
+**Problem**: When a user deleted their account, the event was broadcast globally to all connected users.
 
-**Impact**: All connected users learn that a specific user deleted their account, even if they have no relationship. This is a privacy leak.
-
-**Fix**: Only emit to users who share a conversation with the deleted user.
+**Fix applied**: The `user_deleted` event is now only emitted to users who share at least one conversation with the deleted user, using the same peer-discovery query as the presence events.
 
 ---
 
@@ -350,34 +270,38 @@ io.emit('user_deleted', { userId: req.user.id });
 | # | Issue | Severity | Category |
 |---|-------|----------|----------|
 | 1.1 | ~~Stale key exchange entries after re-login~~ | ✅ Not a bug | Key Exchange |
-| 1.2 | No socket room cleanup (no `leave_conversation`) | 🔴 Critical | Socket |
+| 1.2 | ~~No socket room cleanup (no `leave_conversation`)~~ | ✅ Fixed | Socket |
 | 1.3 | ~~Messages for non-active conversations silently dropped~~ | ✅ Fixed | Messaging |
-| 1.4 | New conversations don't trigger key preloading | 🟠 High | Key Exchange |
+| 1.4 | ~~New conversations don't trigger key preloading~~ | ✅ Fixed | Key Exchange |
 | 1.5 | ~~Race condition in concurrent `setupConversationKey`~~ | ✅ Fixed | Key Exchange |
-| 2.1 | Group chat encryption fundamentally broken | 🔴 Critical | Encryption |
-| 2.2 | Key exchange event gap during conversation switch | 🟡 Medium | Key Exchange |
-| 2.3 | Peer key selection without deduplication | 🟢 Low | Key Exchange |
-| 3.1 | No optimistic UI update for sent messages | 🟡 Medium | UX |
+| 2.1 | Group chat encryption fundamentally broken | 🔴 Deferred | Encryption |
+| 2.2 | ~~Key exchange event gap during conversation switch~~ | ✅ Fixed | Key Exchange |
+| 2.3 | ~~Peer key selection without deduplication~~ | ✅ Fixed | Key Exchange |
+| 3.1 | ~~No optimistic UI update for sent messages~~ | ✅ Fixed | UX |
 | 3.2 | ~~No message deduplication~~ | ✅ Fixed | Messaging |
-| 3.3 | Socket key_exchange not persistent | 🟡 Medium | Socket |
-| 4.1 | Group chat creation UI broken | 🟠 High | UI |
-| 4.2 | No unread message indicators | 🟡 Medium | UX |
-| 4.3 | `new_conversation` payload lacks display data | 🟢 Low | API |
-| 4.4 | Stale active conversation in localStorage | 🟢 Low | State |
-| 5.1 | Presence events broadcast globally | 🟡 Medium | Privacy |
-| 5.2 | `user_deleted` event broadcast globally | 🟡 Medium | Privacy |
+| 3.3 | Socket key_exchange not persistent | ✅ Acceptable | Socket |
+| 4.1 | ~~Group chat creation UI broken~~ | ✅ Fixed | UI |
+| 4.2 | ~~No unread message indicators~~ | ✅ Fixed | UX |
+| 4.3 | ~~`new_conversation` payload lacks display data~~ | ✅ Fixed | API |
+| 4.4 | ~~Stale active conversation in localStorage~~ | ✅ Fixed | State |
+| 5.1 | ~~Presence events broadcast globally~~ | ✅ Fixed | Privacy |
+| 5.2 | ~~`user_deleted` event broadcast globally~~ | ✅ Fixed | Privacy |
 
 ### Root Cause Analysis for the Reported Multi-User Bug
 
 The primary symptoms reported — **"chats of other user coming in the second chat, message of third user not being delivered, second chat not working properly"** — were caused by:
 
-1. **Issue 1.5** (race condition in key setup — **now fixed**) — When the background preloader and user actions overlapped, ephemeral keys got overwritten, causing key mismatches.  Both the preloader and `useMessages` hook called `setupConversationKey` concurrently for the same conversation, generating conflicting ephemeral key pairs.  **A per-conversation lock now prevents this.**
+1. **Issue 1.5** (race condition in key setup — **fixed**) — When the background preloader and user actions overlapped, ephemeral keys got overwritten, causing key mismatches.  Both the preloader and `useMessages` hook called `setupConversationKey` concurrently for the same conversation, generating conflicting ephemeral key pairs.  **A per-conversation lock now prevents this.**
 
-2. **Issue 1.3** (dropped messages for non-active conversations — **now fixed**) — Messages arriving for a non-active conversation were silently discarded by the `useMessages` filter.  When switching back, the user didn't see recent messages until a full server refresh, creating the perception that "messages of the third user are not being delivered."  **A global message handler now decrypts and caches these messages.**
+2. **Issue 1.3** (dropped messages for non-active conversations — **fixed**) — Messages arriving for a non-active conversation were silently discarded by the `useMessages` filter.  When switching back, the user didn't see recent messages until a full server refresh, creating the perception that "messages of the third user are not being delivered."  **A global message handler now decrypts and caches these messages.**
 
-3. **Issue 3.2** (no message deduplication — **now fixed**) — Socket reconnection or server broadcast could cause the same message to appear twice.  **Deduplication checks now prevent this.**
+3. **Issue 3.2** (no message deduplication — **fixed**) — Socket reconnection or server broadcast could cause the same message to appear twice.  **Deduplication checks now prevent this.**
 
-4. **Issue 1.4** (no key preloading for new conversations — still open) — When a third user creates a conversation, the key exchange and room joining don't happen automatically, delaying message delivery.
+4. **Issue 1.4** (no key preloading for new conversations — **fixed**) — When a third user created a conversation, the key exchange and room joining didn't happen automatically.  **The `new_conversation` event handler now auto-joins the room and initiates key exchange.**
+
+5. **Issue 1.2** (no socket room cleanup — **fixed**) — Users accumulated room memberships, causing unnecessary traffic and processing overhead.  **`leave_conversation` now cleans up rooms when switching.**
+
+6. **Issue 2.2** (key exchange event gap — **fixed**) — Split key_exchange listeners had a gap during conversation switches.  **A single unified handler eliminates the gap.**
 
 **Note on stale key exchange entries (Issue 1.1):** The previous analysis incorrectly identified this as a bug.  Preserving old device keys is **intentional** — it ensures that users whose JWT sessions expire (automatic timeout) can still decrypt old conversations after re-login.  The session management has been improved: JWT expiry extended from 24 h → 30 days, and a token refresh endpoint now silently renews the token every time the app is opened.
 
@@ -387,5 +311,19 @@ The ECDH key exchange is **pairwise by design**.  For direct messages (1:1 conve
 
 - The race condition (Issue 1.5) causing key overwrites during concurrent setup
 - Dropped messages (Issue 1.3) giving the appearance of undelivered messages
+- Missing room cleanup (Issue 1.2) causing unnecessary event traffic
+- Key exchange gaps (Issue 2.2) during rapid conversation switching
+- No preloading for new conversations (Issue 1.4) delaying first message delivery
 
-Both are now fixed.  Group chats (3+ participants) remain fundamentally broken because ECDH only works between two parties — this requires a separate group key agreement protocol (Issue 2.1).
+All are now fixed.  Group chats (3+ participants) remain fundamentally limited because ECDH only works between two parties — this requires a separate group key agreement protocol (Issue 2.1, deferred).
+
+### Remaining Issue
+
+**Issue 2.1 — Group Chat Encryption** is the only remaining open issue.  The ECDH key exchange is pairwise by design and cannot support 3+ participants without a protocol redesign (e.g., sender keys, shared group key wrapped per-participant).  The group chat creation UI now correctly supports adding multiple users (Issue 4.1), but **encryption in group chats will only work between the conversation creator and each individual participant**, not across all participants.  A full solution requires:
+
+1. A group key generation and distribution protocol
+2. Per-participant key wrapping using pairwise ECDH keys
+3. Server-side storage for wrapped group keys
+4. Re-keying when participants join or leave
+
+This is a significant architectural change that should be designed and implemented as a dedicated feature.
