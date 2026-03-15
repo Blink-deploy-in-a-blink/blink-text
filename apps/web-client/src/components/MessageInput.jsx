@@ -134,7 +134,6 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
         const messageType = isVideo ? 'video' : 'image';
         await onSendMedia(selectedFile, messageType, replyTo?.id || null);
         clearFileSelection();
-        setReplyAfterSend();
       } catch (err) {
         console.error('Failed to send media:', err);
       } finally {
@@ -153,10 +152,6 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
       await onSend(trimmed, replyTo?.id || null);
     }
     textareaRef.current?.focus();
-  };
-
-  const setReplyAfterSend = () => {
-    // Reply is cleared by the parent after send via onCancelReply
   };
 
   const handleKeyDown = (e) => {

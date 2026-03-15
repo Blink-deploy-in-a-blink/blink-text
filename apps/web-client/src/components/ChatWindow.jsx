@@ -135,7 +135,7 @@ function MediaBubble({ msg, mine, conversationId }) {
     if (msg.messageType === 'image' || msg.messageType === 'voice') {
       loadMedia();
     }
-  }, [msg.mediaId, msg.messageType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [msg.mediaId, msg.messageType, loadMedia]);
 
   // Cleanup object URL on unmount
   useEffect(() => {

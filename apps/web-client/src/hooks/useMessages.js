@@ -208,26 +208,28 @@ export function useMessages(conversationId, myUserId) {
     };
   }, [conversationId]);
 
-  // Optimistic send — show message locally before server confirms (Issue 3.1)
-  const sendMsg = useCallback(async (plaintext, replyToId = null) => {
+  // Ensure a conversation key is available, with retries and socket fallback
+  const ensureConversationKey = useCallback(async () => {
     if (!conversationId) return;
-
-    // If we don't have a key yet, try to set up with more retries + longer delays
     if (!hasConversationKey(conversationId)) {
       await setupConversationKey(conversationId, myUserId, { maxRetries: 6, retryDelay: 500 });
     }
-
-    // Still no key — wait a bit more for socket-based key_exchange to arrive
     if (!hasConversationKey(conversationId)) {
       for (let i = 0; i < 6; i++) {
         await new Promise((r) => setTimeout(r, 500));
         if (hasConversationKey(conversationId)) break;
       }
     }
-
     if (!hasConversationKey(conversationId)) {
       throw new Error('Could not establish encryption with the other user. They may not have opened this conversation yet.');
     }
+  }, [conversationId, myUserId]);
+
+  // Optimistic send — show message locally before server confirms (Issue 3.1)
+  const sendMsg = useCallback(async (plaintext, replyToId = null) => {
+    if (!conversationId) return;
+    await ensureConversationKey();
+
     const payload = await encryptForConversation(conversationId, plaintext);
     const id = uuidv4();
 
@@ -249,25 +251,12 @@ export function useMessages(conversationId, myUserId) {
     }
 
     await sendMessage(id, conversationId, myUserId, payload, replyToId);
-  }, [conversationId, myUserId]);
+  }, [conversationId, myUserId, ensureConversationKey]);
 
   // Send a media message (image, video, or voice)
   const sendMediaMsg = useCallback(async (file, messageType, replyToId = null) => {
     if (!conversationId) return;
-
-    // Ensure we have a conversation key
-    if (!hasConversationKey(conversationId)) {
-      await setupConversationKey(conversationId, myUserId, { maxRetries: 6, retryDelay: 500 });
-    }
-    if (!hasConversationKey(conversationId)) {
-      for (let i = 0; i < 6; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        if (hasConversationKey(conversationId)) break;
-      }
-    }
-    if (!hasConversationKey(conversationId)) {
-      throw new Error('Could not establish encryption with the other user.');
-    }
+    await ensureConversationKey();
 
     // Read the file as ArrayBuffer
     const arrayBuffer = await file.arrayBuffer();
@@ -313,7 +302,7 @@ export function useMessages(conversationId, myUserId) {
     }
 
     await sendMessage(id, conversationId, myUserId, payload, replyToId, messageType, mediaId);
-  }, [conversationId, myUserId]);
+  }, [conversationId, myUserId, ensureConversationKey]);
 
   const deleteMsg = useCallback(async (messageId, mode = 'for_me') => {
     if (!conversationId) return;
