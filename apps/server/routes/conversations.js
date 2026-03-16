@@ -149,7 +149,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     if (before) {
       // Load older messages before the cursor timestamp
       rows = db.prepare(`
-        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx
         FROM messages
         WHERE conversation_id = ?
           AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
@@ -162,7 +162,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     } else {
       // Load the latest messages
       rows = db.prepare(`
-        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx
         FROM messages
         WHERE conversation_id = ?
           AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
@@ -174,19 +174,25 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     }
 
     // Return messages in the canonical EncryptedMessage format
-    const messages = rows.map((row) => ({
-      id: row.id,
-      conversationId: row.conversation_id,
-      senderId: row.sender_id,
-      timestamp: row.timestamp,
-      replyToId: row.reply_to_id || null,
-      edited: !!row.edited,
-      payload: {
+    const messages = rows.map((row) => {
+      const payload = {
         ciphertext: row.ciphertext,
         iv: row.iv,
         version: row.version,
-      },
-    }));
+      };
+      if (row.chain_idx != null) payload.chainIdx = row.chain_idx;
+      return {
+        id: row.id,
+        conversationId: row.conversation_id,
+        senderId: row.sender_id,
+        timestamp: row.timestamp,
+        replyToId: row.reply_to_id || null,
+        edited: !!row.edited,
+        payload,
+        messageType: row.message_type || 'text',
+        mediaId: row.media_id || null,
+      };
+    });
 
     // hasMore: true if we got exactly `limit` rows (more might exist)
     return res.json({ messages, hasMore: rows.length === limit });

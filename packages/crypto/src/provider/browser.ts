@@ -2,9 +2,19 @@
  * Browser crypto provider using the Web Crypto API (globalThis.crypto.subtle).
  * All methods return Promises to match the CryptoProvider interface.
  */
-import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload } from '../types.js';
+import type { CryptoProvider, IdentityKeyPair, ECDHKeyPair, EncryptedPayload, EncryptedBinaryPayload } from '../types.js';
 
-const subtle = globalThis.crypto.subtle;
+function getSubtle(): SubtleCrypto {
+  const s = globalThis.crypto?.subtle;
+  if (!s) {
+    throw new Error(
+      'Web Crypto API (crypto.subtle) is not available. ' +
+      'This usually means the page is served over plain HTTP instead of HTTPS. ' +
+      'On mobile devices accessing via LAN IP, use https:// instead of http://.'
+    );
+  }
+  return s;
+}
 
 function bufToBase64(buf: ArrayBuffer | Uint8Array): string {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
@@ -26,6 +36,7 @@ function base64ToBuf(b64: string): Uint8Array {
 
 export class BrowserProvider implements CryptoProvider {
   async generateIdentityKey(): Promise<IdentityKeyPair> {
+    const subtle = getSubtle();
     const kp = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
     const [pub, priv] = await Promise.all([
       subtle.exportKey('jwk', kp.publicKey),
@@ -35,6 +46,7 @@ export class BrowserProvider implements CryptoProvider {
   }
 
   async generateECDHKey(): Promise<ECDHKeyPair> {
+    const subtle = getSubtle();
     const kp = await subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey', 'deriveBits']);
     const [pub, priv] = await Promise.all([
       subtle.exportKey('jwk', kp.publicKey),
@@ -44,6 +56,7 @@ export class BrowserProvider implements CryptoProvider {
   }
 
   async deriveSharedSecret(privateKeyJwk: JsonWebKey, publicKeyJwk: JsonWebKey): Promise<Uint8Array> {
+    const subtle = getSubtle();
     const [privKey, pubKey] = await Promise.all([
       subtle.importKey('jwk', privateKeyJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']),
       subtle.importKey('jwk', publicKeyJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, []),
@@ -53,6 +66,7 @@ export class BrowserProvider implements CryptoProvider {
   }
 
   async deriveConversationKey(sharedSecret: Uint8Array, conversationId: string): Promise<Uint8Array> {
+    const subtle = getSubtle();
     // Copy the shared secret into a clean ArrayBuffer to satisfy strict BufferSource typing.
     const keyMaterial = sharedSecret.buffer.slice(
       sharedSecret.byteOffset,
@@ -73,6 +87,7 @@ export class BrowserProvider implements CryptoProvider {
   }
 
   async encryptMessage(conversationKey: Uint8Array, plaintext: string): Promise<EncryptedPayload> {
+    const subtle = getSubtle();
     const aesKey = await subtle.importKey('raw', conversationKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['encrypt']);
     const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
     const encoded = new TextEncoder().encode(plaintext);
@@ -85,6 +100,7 @@ export class BrowserProvider implements CryptoProvider {
   }
 
   async decryptMessage(conversationKey: Uint8Array, payload: EncryptedPayload): Promise<string> {
+    const subtle = getSubtle();
     const aesKey = await subtle.importKey('raw', conversationKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['decrypt']);
     const ciphertextBuf = base64ToBuf(payload.ciphertext);
     const ivBuf = base64ToBuf(payload.iv);
@@ -92,13 +108,30 @@ export class BrowserProvider implements CryptoProvider {
     return new TextDecoder().decode(plainBuf);
   }
 
+  async encryptBinary(conversationKey: Uint8Array, data: Uint8Array): Promise<EncryptedBinaryPayload> {
+    const subtle = getSubtle();
+    const aesKey = await subtle.importKey('raw', conversationKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['encrypt']);
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const ciphertextBuf = await subtle.encrypt({ name: 'AES-GCM', iv: iv as unknown as BufferSource }, aesKey, data as unknown as BufferSource);
+    return { encrypted: new Uint8Array(ciphertextBuf), iv };
+  }
+
+  async decryptBinary(conversationKey: Uint8Array, payload: EncryptedBinaryPayload): Promise<Uint8Array> {
+    const subtle = getSubtle();
+    const aesKey = await subtle.importKey('raw', conversationKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['decrypt']);
+    const plainBuf = await subtle.decrypt({ name: 'AES-GCM', iv: payload.iv as unknown as BufferSource }, aesKey, payload.encrypted as unknown as BufferSource);
+    return new Uint8Array(plainBuf);
+  }
+
   async signData(privateKeyJwk: JsonWebKey, data: string): Promise<string> {
+    const subtle = getSubtle();
     const privKey = await subtle.importKey('jwk', privateKeyJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
     const sig = await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privKey, new TextEncoder().encode(data) as unknown as BufferSource);
     return bufToBase64(sig);
   }
 
   async verifySignature(publicKeyJwk: JsonWebKey, data: string, signature: string): Promise<boolean> {
+    const subtle = getSubtle();
     const pubKey = await subtle.importKey('jwk', publicKeyJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
     return subtle.verify(
       { name: 'ECDSA', hash: 'SHA-256' },

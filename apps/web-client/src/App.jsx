@@ -3,7 +3,7 @@ import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
 import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
 import { getSocket, joinConversation } from './services/socket.js';
-import { completeKeyExchangeFromSocket, setupConversationKey, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
+import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
 import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
 import Login from './components/Login.jsx';
@@ -90,9 +90,21 @@ function MessengerView({ user, logout }) {
       }
     };
 
+    const handleKeyConfirmEvent = async ({ conversationId, confirmToken }) => {
+      try {
+        await handleKeyConfirm(conversationId, confirmToken, user.id);
+      } catch (err) {
+        console.warn('[global] key_confirm handling failed for', conversationId, err.message);
+      }
+    };
+
     socket.on('key_exchange', handleKeyExchange);
-    return () => { socket.off('key_exchange', handleKeyExchange); };
-  }, []);
+    socket.on('key_confirm', handleKeyConfirmEvent);
+    return () => {
+      socket.off('key_exchange', handleKeyExchange);
+      socket.off('key_confirm', handleKeyConfirmEvent);
+    };
+  }, [user.id]);
 
   // Global message listener — catches messages for NON-ACTIVE conversations so
   // they are decrypted and appended to the message cache + unread count.
@@ -140,7 +152,7 @@ function MessengerView({ user, logout }) {
     return () => { socket.off('new_conversation', handleNewConversation); };
   }, [user.id]);
 
-  const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, deleteMessage, editMessage } = useMessages(
+  const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, sendMediaMessage, deleteMessage, editMessage } = useMessages(
     activeConversation?.id || null,
     user.id
   );
@@ -184,6 +196,15 @@ function MessengerView({ user, logout }) {
       setReplyTo(null);
     } catch (err) {
       console.error('Send failed:', err);
+    }
+  };
+
+  const handleSendMedia = async (file, messageType, replyToId) => {
+    try {
+      await sendMediaMessage(file, messageType, replyToId);
+      setReplyTo(null);
+    } catch (err) {
+      console.error('Send media failed:', err);
     }
   };
 
@@ -239,6 +260,7 @@ function MessengerView({ user, logout }) {
           />
           <MessageInput
             onSend={handleSend}
+            onSendMedia={handleSendMedia}
             onSaveEdit={handleSaveEdit}
             disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
             replyTo={replyTo}
@@ -262,7 +284,7 @@ function MessengerView({ user, logout }) {
 }
 
 export default function App() {
-  const { user, login, register, logout, ready } = useAuth();
+  const { user, login, register, logout, ready, identityError, retryIdentity } = useAuth();
   const [view, setView] = useState('login');
 
   if (!ready) {
@@ -274,7 +296,31 @@ export default function App() {
   }
 
   if (user) {
-    return <MessengerView user={user} logout={logout} />;
+    return (
+      <>
+        {identityError && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+            background: '#d32f2f', color: '#fff', padding: '10px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            fontSize: '14px', fontFamily: 'sans-serif',
+          }}>
+            <span>⚠️ Encryption setup failed: {identityError}. Messages cannot be sent until this is resolved.</span>
+            <button
+              onClick={retryIdentity}
+              style={{
+                background: '#fff', color: '#d32f2f', border: 'none', borderRadius: '4px',
+                padding: '6px 14px', cursor: 'pointer', fontWeight: 'bold', marginLeft: '12px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        <MessengerView user={user} logout={logout} />
+      </>
+    );
   }
 
   if (view === 'register') {

@@ -12,13 +12,15 @@
 3. [Prerequisites](#prerequisites)
 4. [Repo structure](#repo-structure)
 5. [Quick start — local development](#quick-start--local-development)
-6. [Environment variables](#environment-variables)
-7. [Scripts reference](#scripts-reference)
-8. [API reference](#api-reference)
-9. [WebSocket events](#websocket-events)
-10. [Manual testing walkthrough](#manual-testing-walkthrough)
-11. [Running with Docker](#running-with-docker)
-12. [Security notes](#security-notes)
+6. [Deploying on your LAN](#deploying-on-your-lan)
+7. [Deploying to AWS EC2 (production)](#deploying-to-aws-ec2-production)
+8. [Environment variables](#environment-variables)
+9. [Scripts reference](#scripts-reference)
+10. [API reference](#api-reference)
+11. [WebSocket events](#websocket-events)
+12. [Manual testing walkthrough](#manual-testing-walkthrough)
+13. [Running with Docker](#running-with-docker)
+14. [Security notes](#security-notes)
 
 ---
 
@@ -215,6 +217,196 @@ Open **two separate browser windows** (or one normal + one incognito tab):
 3. In **Window 1** → Click **New conversation**, search for `bob`, select Direct Message, click Create
 4. Type a message and press **Enter** or click **Send**
 5. Switch to **Window 2** — Bob's window will receive and decrypt the message in real time
+
+---
+
+## Deploying on your LAN
+
+Want to use blink-text with friends/devices on the same Wi-Fi network? You can run the server on one machine and access it from phones, laptops, etc.
+
+> **Important:** The Web Crypto API (`crypto.subtle`) requires a **secure context**. This means the app must be served over HTTPS or from `localhost`. If you access it via a plain `http://192.168.x.x` URL, encryption will not work. Use one of the options below.
+
+### Option A — Access from the same machine (easiest)
+
+Just follow the [Quick start](#quick-start--local-development) steps above. Open `http://localhost:5173` in two browser windows.
+
+### Option B — Access from other devices on the LAN
+
+#### 1. Start the server and client as normal
+
+```bash
+npm run dev:server   # terminal 1
+npm run dev:client   # terminal 2
+```
+
+The Vite dev server already listens on `0.0.0.0` (all interfaces).
+
+#### 2. Find your machine's LAN IP
+
+```bash
+# macOS / Linux
+ip addr show | grep "inet 192"
+
+# Windows (PowerShell)
+Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' }
+```
+
+#### 3. Open on other devices
+
+On your phone or other laptop, open:
+
+```
+https://<your-lan-ip>:5173
+```
+
+> **Note:** You need HTTPS for `crypto.subtle` to work on non-localhost origins. You can use a self-signed certificate or a tool like [mkcert](https://github.com/FiloSottile/mkcert) to generate trusted local certs. Alternatively, skip straight to the [AWS deployment](#deploying-to-aws-ec2-production) for a proper HTTPS setup via Cloudflare.
+
+#### 4. Update CORS (if needed)
+
+The server already accepts connections from private-network IPs (`192.168.*`, `10.*`, `172.16-31.*`). No changes needed.
+
+---
+
+## Deploying to AWS EC2 (production)
+
+This guide deploys blink-text on an EC2 instance with nginx as a reverse proxy and Cloudflare for free HTTPS.
+
+### Architecture
+
+```
+Browser ──HTTPS──► Cloudflare ──HTTP──► nginx:80 ──► node:3001
+                   (TLS termination)    (reverse     (Express serves
+                                         proxy)       API + static files
+                                                      + WebSocket)
+```
+
+In production, you do **not** run the Vite dev server. Instead:
+- `vite build` compiles the client into static HTML/JS/CSS files
+- The Express server (`app.js`) serves those files AND handles the API + WebSocket
+- nginx sits in front on port 80 as a reverse proxy
+- Cloudflare handles TLS termination (Flexible SSL mode)
+
+### 1. Provision an EC2 instance
+
+- **AMI:** Ubuntu 22.04+ (or Amazon Linux 2023)
+- **Instance type:** `t3.micro` (free tier) is fine for small groups
+- **Security group:** Open ports **80** (HTTP) and **22** (SSH). Do **not** expose port 3001 — nginx handles routing.
+- **Elastic IP:** Attach one so the IP doesn't change on restart
+
+### 2. Install dependencies on EC2
+
+```bash
+# SSH into your instance
+ssh -i your-key.pem ubuntu@<ec2-public-ip>
+
+# Install Node.js 20+
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Install nginx
+sudo apt update && sudo apt install -y nginx
+
+# Verify
+node -v    # v20.x or higher
+npm -v     # 9.x or higher
+nginx -v
+```
+
+### 3. Clone and build
+
+```bash
+git clone https://github.com/Blink-deploy-in-a-blink/blink-text.git
+cd blink-text
+
+# Install all workspace dependencies
+npm install
+
+# Build the web client (produces apps/web-client/dist/)
+cd apps/web-client
+npx vite build
+cd ../..
+```
+
+### 4. Configure the server
+
+```bash
+cd apps/server
+cp .env.example .env
+nano .env
+```
+
+Set these values:
+
+```env
+JWT_SECRET=replace-with-a-long-random-string-at-least-32-chars
+PORT=3001
+CLIENT_ORIGIN=https://yourdomain.com
+```
+
+> Replace `yourdomain.com` with your actual Cloudflare domain.
+
+### 5. Set up nginx
+
+An nginx config file is included in the repo root (`nginx.conf`). Copy it into place:
+
+```bash
+cd ~/blink-text
+sudo cp nginx.conf /etc/nginx/sites-available/blink
+sudo ln -sf /etc/nginx/sites-available/blink /etc/nginx/sites-enabled/blink
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Edit to set your domain (optional but recommended)
+sudo nano /etc/nginx/sites-available/blink
+# Change: server_name _; → server_name yourdomain.com;
+
+# Test and restart
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+The nginx config handles:
+- Proxying all HTTP traffic to Node.js on port 3001
+- WebSocket upgrades for Socket.io (`/socket.io/`)
+- 24-hour WebSocket timeout to prevent idle disconnects
+
+### 6. Start the server
+
+```bash
+cd ~/blink-text/apps/server
+
+# Quick test
+node app.js
+
+# For production — use pm2 to keep it running
+sudo npm install -g pm2
+pm2 start app.js --name blink
+pm2 save
+pm2 startup    # follow the printed command to enable auto-start on reboot
+```
+
+### 7. Set up Cloudflare
+
+1. **Add your domain** to Cloudflare (free plan works)
+2. **DNS:** Create an `A` record pointing to your EC2 Elastic IP, with **Proxy enabled** (orange cloud)
+3. **SSL/TLS:** Set encryption mode to **Flexible** (Cloudflare terminates TLS, connects to your server on HTTP)
+4. **WebSockets:** Enabled by default on all Cloudflare plans
+
+### 8. Verify
+
+Open `https://yourdomain.com` in a browser. You should see the blink-text login page. Register two accounts and test messaging.
+
+### Updating the deployment
+
+```bash
+cd ~/blink-text
+git pull
+
+# Rebuild the client
+cd apps/web-client && npx vite build && cd ../..
+
+# Restart the server
+pm2 restart blink
+```
 
 ---
 
@@ -651,7 +843,7 @@ The database is persisted in a named Docker volume (`db_data`).
 | Message encryption | AES-256-GCM with a random 12-byte IV per message |
 | Key exchange | ECDH P-256 + HKDF-SHA-256 (conversation ID as salt) |
 | Identity signing | ECDSA P-256 |
-| Transport security | HTTPS/WSS in production (not configured here — add a reverse proxy) |
+| Transport security | HTTPS/WSS via Cloudflare or reverse proxy (see [deployment guide](#deploying-to-aws-ec2-production)) |
 | Security headers | `helmet` (CSP, HSTS, X-Frame-Options, …) |
 | Rate limiting | 20 auth requests / 15 min; 200 general requests / min |
 | Input validation | `express-validator` on all endpoints |

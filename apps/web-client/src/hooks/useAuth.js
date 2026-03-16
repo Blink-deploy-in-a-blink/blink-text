@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { login as apiLogin, register as apiRegister, refreshToken as apiRefreshToken } from '../services/api.js';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
-import { initializeIdentity, clearAllCryptoKeys } from '../services/cryptoService.js';
+import { initializeIdentity, clearAllCryptoKeys, isIdentityReady } from '../services/cryptoService.js';
 
 /**
  * Auth state hook.
@@ -48,6 +48,18 @@ export function useAuth() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [ready, setReady] = useState(false);
+  const [identityError, setIdentityError] = useState(null);
+
+  // Retry initializing identity — called from UI if initial attempt failed
+  const retryIdentity = useCallback(async () => {
+    setIdentityError(null);
+    try {
+      await initializeIdentity();
+    } catch (err) {
+      console.error('Retry crypto identity failed:', err);
+      setIdentityError(err.message || 'Failed to initialize encryption');
+    }
+  }, []);
 
   // Re-initialize socket + crypto when restoring a session from localStorage
   useEffect(() => {
@@ -66,9 +78,13 @@ export function useAuth() {
           // via the API interceptor if needed, nothing else to do here.
         });
       initializeIdentity()
-        .then(() => setReady(true))
+        .then(() => {
+          setIdentityError(null);
+          setReady(true);
+        })
         .catch((err) => {
           console.error('Failed to restore crypto identity:', err);
+          setIdentityError(err.message || 'Failed to initialize encryption');
           setReady(true);
         });
     } else {
@@ -85,7 +101,14 @@ export function useAuth() {
     // Connect socket and initialize crypto identity BEFORE setting user,
     // so MessengerView doesn't render until identity is ready.
     connectSocket(token);
-    await initializeIdentity();
+    try {
+      await initializeIdentity();
+      setIdentityError(null);
+    } catch (err) {
+      console.error('Post-login crypto init failed:', err);
+      setIdentityError(err.message || 'Failed to initialize encryption');
+      // Don't throw — let the user in so they can retry
+    }
     setUser(u);
     setReady(true);
   }, []);
@@ -136,5 +159,5 @@ export function useAuth() {
     setReady(true);
   }, []);
 
-  return { user, loading, error, login, register, logout, ready };
+  return { user, loading, error, login, register, logout, ready, identityError, retryIdentity };
 }

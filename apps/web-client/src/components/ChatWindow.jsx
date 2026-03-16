@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { downloadMedia } from '../services/api.js';
+import { decryptMediaForConversation } from '../services/cryptoService.js';
 
 const s = {
   window: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
@@ -61,7 +63,184 @@ const s = {
     fontSize: '0.85rem', display: 'block', width: '100%',
     background: 'transparent', border: 'none', textAlign: 'left',
   },
+  mediaBubble: (mine) => ({
+    borderRadius: mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+    background: mine ? '#6366f1' : '#1e1e2e', color: '#fff',
+    overflow: 'hidden', maxWidth: '300px',
+  }),
+  mediaImg: {
+    display: 'block', maxWidth: '100%', maxHeight: '300px',
+    borderRadius: '12px', cursor: 'pointer',
+  },
+  mediaVideo: {
+    display: 'block', maxWidth: '100%', maxHeight: '300px',
+    borderRadius: '12px',
+  },
+  downloadBtn: {
+    display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+    padding: '0.3rem 0.6rem', fontSize: '0.75rem', color: '#aaa',
+    background: 'transparent', border: 'none', cursor: 'pointer',
+    textDecoration: 'underline',
+  },
+  voiceBubble: (mine) => ({
+    padding: '0.5rem 0.8rem',
+    borderRadius: mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+    background: mine ? '#6366f1' : '#1e1e2e', color: '#fff',
+    display: 'flex', flexDirection: 'column', gap: '0.3rem',
+    minWidth: '200px',
+  }),
 };
+
+/** Parse media metadata from decrypted plaintext */
+function parseMediaMeta(plaintext) {
+  try {
+    const meta = JSON.parse(plaintext);
+    if (meta && meta.fileName) return meta;
+  } catch { /* not JSON — normal text message */ }
+  return null;
+}
+
+/** Decrypts and loads media for display */
+function MediaBubble({ msg, mine, conversationId }) {
+  const [objectUrl, setObjectUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const meta = parseMediaMeta(msg.plaintext);
+
+  const loadMedia = useCallback(async () => {
+    if (!msg.mediaId || objectUrl || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data: encryptedData, iv: ivBase64 } = await downloadMedia(msg.mediaId);
+      // Decode IV from base64
+      const ivBinary = atob(ivBase64);
+      const iv = new Uint8Array(ivBinary.length);
+      for (let i = 0; i < ivBinary.length; i++) iv[i] = ivBinary.charCodeAt(i);
+      const decrypted = await decryptMediaForConversation(conversationId, encryptedData, iv);
+      const mimeType = meta?.mimeType || 'application/octet-stream';
+      const blob = new Blob([decrypted], { type: mimeType });
+      setObjectUrl(URL.createObjectURL(blob));
+    } catch (err) {
+      console.error('Failed to load media:', err);
+      setError('Failed to load media');
+    } finally {
+      setLoading(false);
+    }
+  }, [msg.mediaId, objectUrl, loading, conversationId, meta?.mimeType]);
+
+  // Auto-load images and voice notes; videos load on click
+  useEffect(() => {
+    if (!msg.mediaId) return;
+    if (msg.messageType === 'image' || msg.messageType === 'voice') {
+      loadMedia();
+    }
+  }, [msg.mediaId, msg.messageType, loadMedia]);
+
+  // Cleanup object URL on unmount
+  useEffect(() => {
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [objectUrl]);
+
+  const handleDownload = () => {
+    if (!objectUrl) return;
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = meta?.fileName || 'download';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  if (!meta || !msg.mediaId) return null;
+
+  // Voice note
+  if (msg.messageType === 'voice') {
+    return (
+      <div style={s.voiceBubble(mine)}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}>
+          🎤 <span>Voice Note</span>
+        </div>
+        {loading && <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Loading…</span>}
+        {error && <span style={{ fontSize: '0.75rem', color: '#f87171' }}>{error}</span>}
+        {objectUrl && (
+          <audio controls style={{ width: '100%', maxWidth: '250px', height: '36px' }} preload="auto">
+            <source src={objectUrl} type={meta.mimeType || 'audio/webm'} />
+          </audio>
+        )}
+        {objectUrl && (
+          <button style={s.downloadBtn} onClick={handleDownload}>⬇ Save</button>
+        )}
+      </div>
+    );
+  }
+
+  // Image
+  if (msg.messageType === 'image') {
+    return (
+      <div style={s.mediaBubble(mine)}>
+        {loading && (
+          <div style={{ padding: '2rem', textAlign: 'center', fontSize: '0.8rem', color: '#aaa' }}>
+            Loading image…
+          </div>
+        )}
+        {error && (
+          <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.8rem', color: '#f87171' }}>
+            {error}
+          </div>
+        )}
+        {objectUrl && (
+          <img src={objectUrl} alt={meta.fileName} style={s.mediaImg} onClick={handleDownload} title="Click to download" />
+        )}
+        <div style={{ padding: '0.3rem 0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.7rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {meta.fileName}
+          </span>
+          {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}>⬇</button>}
+        </div>
+      </div>
+    );
+  }
+
+  // Video
+  if (msg.messageType === 'video') {
+    return (
+      <div style={s.mediaBubble(mine)}>
+        {!objectUrl && !loading && !error && (
+          <button
+            style={{ padding: '2rem', width: '100%', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '0.85rem' }}
+            onClick={loadMedia}
+          >
+            ▶ Load video ({meta.fileName})
+          </button>
+        )}
+        {loading && (
+          <div style={{ padding: '2rem', textAlign: 'center', fontSize: '0.8rem', color: '#aaa' }}>
+            Loading video…
+          </div>
+        )}
+        {error && (
+          <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.8rem', color: '#f87171' }}>
+            {error}
+          </div>
+        )}
+        {objectUrl && (
+          <video controls style={s.mediaVideo} preload="metadata">
+            <source src={objectUrl} type={meta.mimeType || 'video/mp4'} />
+          </video>
+        )}
+        <div style={{ padding: '0.3rem 0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.7rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {meta.fileName}
+          </span>
+          {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}>⬇</button>}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
 
 export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onNewConversation, onBack }) {
   const bottomRef = useRef(null);
@@ -167,7 +346,11 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const getReplyText = (replyToId) => {
     if (!replyToId) return null;
     const orig = messages.find((m) => m.id === replyToId);
-    return orig ? orig.plaintext : '[deleted message]';
+    if (!orig) return '[deleted message]';
+    if (orig.messageType === 'image') return '📷 Image';
+    if (orig.messageType === 'video') return '🎬 Video';
+    if (orig.messageType === 'voice') return '🎤 Voice note';
+    return orig.plaintext;
   };
 
   if (!conversation) {
@@ -266,15 +449,19 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 {replyText && (
                   <div style={s.replyQuote}>↩ {replyText}</div>
                 )}
-                <div style={msg.plaintext === '[unable to decrypt]'
-                  ? { ...s.bubble(mine), background: '#1a1a2e', border: '1px dashed #333', fontStyle: 'italic', color: '#666', fontSize: '0.82rem' }
-                  : s.bubble(mine)
-                }>
-                  {msg.plaintext === '[unable to decrypt]'
-                    ? '🔒 This message can\'t be decrypted — encryption keys have changed'
-                    : msg.plaintext}
-                  {msg.edited && <span style={s.edited}>(edited)</span>}
-                </div>
+                {(msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'voice') && msg.mediaId ? (
+                  <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} />
+                ) : (
+                  <div style={msg.plaintext === '[unable to decrypt]'
+                    ? { ...s.bubble(mine), background: '#1a1a2e', border: '1px dashed #333', fontStyle: 'italic', color: '#666', fontSize: '0.82rem' }
+                    : s.bubble(mine)
+                  }>
+                    {msg.plaintext === '[unable to decrypt]'
+                      ? '🔒 This message can\'t be decrypted — encryption keys have changed'
+                      : msg.plaintext}
+                    {msg.edited && <span style={s.edited}>(edited)</span>}
+                  </div>
+                )}
                 <div style={s.meta(mine)}>{formatTime(msg.timestamp)}</div>
               </div>
             </div>
@@ -291,7 +478,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
             onClick={() => handleAction('reply')}>
             ↩ Reply
           </button>
-          {menu.msg.senderId === myUserId && (
+          {menu.msg.senderId === myUserId && menu.msg.messageType !== 'image' && menu.msg.messageType !== 'video' && menu.msg.messageType !== 'voice' && (
             <button style={s.menuItem}
               onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
               onMouseLeave={(e) => (e.target.style.background = 'transparent')}

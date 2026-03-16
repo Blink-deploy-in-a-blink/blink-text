@@ -23,6 +23,7 @@ export default defineConfig({
     host: '0.0.0.0', // allow access from other devices on the LAN
     proxy: {
       '/api': { target: 'http://localhost:3001', changeOrigin: true },
+      '/socket.io': { target: 'http://localhost:3001', changeOrigin: true, ws: true },
     },
   },
 });

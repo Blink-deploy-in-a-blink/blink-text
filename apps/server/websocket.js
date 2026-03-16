@@ -98,10 +98,13 @@ function registerSocketHandlers(io) {
         const messageId = payload.id || uuidv4();
         const timestamp = Date.now();
         const replyToId = (msg && msg.replyToId) || null;
+        const messageType = (msg && msg.messageType) || 'text';
+        const mediaId = (msg && msg.mediaId) || null;
+        const chainIdx = (encPayload.chainIdx != null) ? encPayload.chainIdx : null;
 
         db.prepare(
-          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp);
+          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp, message_type, media_id, chain_idx) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp, messageType, mediaId, chainIdx);
 
         const message = {
           id: messageId,
@@ -110,7 +113,9 @@ function registerSocketHandlers(io) {
           timestamp,
           replyToId,
           edited: false,
-          payload: { ciphertext, iv, version: version || 'v1' },
+          payload: { ciphertext, iv, version: version || 'v1', chainIdx },
+          messageType,
+          mediaId,
         };
 
         io.to(conversationId).emit('message', message);
@@ -136,6 +141,25 @@ function registerSocketHandlers(io) {
       socket.to(conversationId).emit('key_exchange', normalized);
     });
 
+    // key_confirm: relay key confirmation token to conversation peers
+    socket.on('key_confirm', (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      const { conversationId, confirmToken } = payload;
+      if (!conversationId || typeof conversationId !== 'string') return;
+      if (!confirmToken || typeof confirmToken !== 'string') return;
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+      if (!participant) return;
+
+      socket.to(conversationId).emit('key_confirm', {
+        conversationId,
+        userId,
+        confirmToken,
+      });
+    });
+
     socket.on('edit_message', ({ conversationId, messageId, payload: encPayload }, ack) => {
       if (!conversationId || !messageId || !encPayload) {
         if (typeof ack === 'function') ack({ error: 'Missing fields' });
@@ -158,12 +182,12 @@ function registerSocketHandlers(io) {
         }
 
         const { ciphertext, iv, version } = encPayload;
-        db.prepare('UPDATE messages SET ciphertext = ?, iv = ?, version = ?, edited = 1 WHERE id = ?')
-          .run(ciphertext, iv, version || 'v1', messageId);
+        db.prepare('UPDATE messages SET ciphertext = ?, iv = ?, version = ?, edited = 1, chain_idx = ? WHERE id = ?')
+          .run(ciphertext, iv, version || 'v1', encPayload.chainIdx != null ? encPayload.chainIdx : null, messageId);
 
         io.to(conversationId).emit('message_edited', {
           conversationId, messageId,
-          payload: { ciphertext, iv, version: version || 'v1' },
+          payload: { ciphertext, iv, version: version || 'v1', chainIdx: encPayload.chainIdx != null ? encPayload.chainIdx : undefined },
         });
         if (typeof ack === 'function') ack({ success: true });
       } catch (err) {
