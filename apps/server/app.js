@@ -3,6 +3,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -22,31 +23,32 @@ const httpServer = http.createServer(app);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
-// Allow connections from localhost and any LAN IP
-const allowedOrigins = [CLIENT_ORIGIN];
-if (CLIENT_ORIGIN.includes('localhost')) {
-  // Also accept requests from the machine's LAN IP
-  allowedOrigins.push(CLIENT_ORIGIN.replace('localhost', '0.0.0.0'));
-  // Dynamically allow any 192.168.x.x / 10.x.x.x / 172.x.x.x origin on the same port
+// ------------------------------------------------------------------
+// CORS: accept Cloudflare domain, CLIENT_ORIGIN, and LAN IPs
+// ------------------------------------------------------------------
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // curl, mobile apps, same-origin
+  if (origin === CLIENT_ORIGIN) return true;
+  try {
+    const url = new URL(origin);
+    const ip = url.hostname;
+    // localhost / loopback
+    if (ip === 'localhost' || ip === '127.0.0.1') return true;
+    // Private LAN ranges
+    if (ip.startsWith('192.168.') || ip.startsWith('10.') ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+    // If CLIENT_ORIGIN is a domain (e.g. https://blink.example.com),
+    // also allow that exact domain
+    const clientHost = new URL(CLIENT_ORIGIN).hostname;
+    if (ip === clientHost || url.hostname === clientHost) return true;
+  } catch {}
+  return false;
 }
 
 app.use(helmet());
 app.use(cors({
   origin: (origin, cb) => {
-    // Allow requests with no origin (curl, mobile apps, etc.)
-    if (!origin) return cb(null, true);
-    // Allow any origin on the same port during development
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    // Allow any private-network origin (LAN)
-    try {
-      const url = new URL(origin);
-      const ip = url.hostname;
-      if (ip === 'localhost' || ip === '127.0.0.1' ||
-          ip.startsWith('192.168.') || ip.startsWith('10.') ||
-          /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) {
-        return cb(null, true);
-      }
-    } catch {}
+    if (isAllowedOrigin(origin)) return cb(null, true);
     cb(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -70,7 +72,23 @@ app.use('/api/users', usersRoutes);
 app.use('/api/media', mediaRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
-app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
+
+// ------------------------------------------------------------------
+// Serve the built web client in production (after `vite build`)
+// ------------------------------------------------------------------
+const clientDistPath = path.join(__dirname, '../web-client/dist');
+app.use(express.static(clientDistPath));
+
+// API 404 handler — only for /api routes
+app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
+
+// SPA fallback — serve index.html for any non-API, non-file route
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(clientDistPath, 'index.html'), (err) => {
+    if (err) res.status(404).json({ error: 'Not found' });
+  });
+});
+
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
@@ -79,16 +97,7 @@ app.use((err, _req, res, _next) => {
 const io = new Server(httpServer, {
   cors: {
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      try {
-        const url = new URL(origin);
-        const ip = url.hostname;
-        if (ip === 'localhost' || ip === '127.0.0.1' ||
-            ip.startsWith('192.168.') || ip.startsWith('10.') ||
-            /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) {
-          return cb(null, true);
-        }
-      } catch {}
+      if (isAllowedOrigin(origin)) return cb(null, true);
       cb(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST'],

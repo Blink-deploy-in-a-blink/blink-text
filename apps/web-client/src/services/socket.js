@@ -1,6 +1,11 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`;
+// In production (served from same origin), connect to window.location.origin.
+// In development (Vite dev server on 5173, API on 3001), connect to the API port.
+const SOCKET_URL = import.meta.env.VITE_API_URL ||
+  (window.location.port === '5173'
+    ? `${window.location.protocol}//${window.location.hostname}:3001`
+    : window.location.origin);
 
 let socket = null;
 
@@ -57,4 +62,8 @@ export function sendMessage(id, conversationId, senderId, payload, replyToId = n
 
 export function sendKeyExchange(conversationId, userId, deviceId, ephemeralPublicKey) {
   if (socket) socket.emit('key_exchange', { conversationId, userId, deviceId, ephemeralPublicKey });
+}
+
+export function sendKeyConfirm(conversationId, confirmToken) {
+  if (socket) socket.emit('key_confirm', { conversationId, confirmToken });
 }

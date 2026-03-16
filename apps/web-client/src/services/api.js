@@ -1,7 +1,15 @@
 import axios from 'axios';
 
+// In production (served from same origin), API is at /api on same host.
+// In development (Vite proxy on 5173 → 3001), also use relative /api paths
+// which Vite proxies to localhost:3001.
+const baseURL = import.meta.env.VITE_API_URL ||
+  (window.location.port === '5173'
+    ? `${window.location.protocol}//${window.location.hostname}:3001`
+    : window.location.origin);
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`,
+  baseURL,
   withCredentials: true,
 });
 

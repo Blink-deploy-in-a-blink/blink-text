@@ -102,5 +102,8 @@ if (!messageColumns.includes('message_type')) {
 if (!messageColumns.includes('media_id')) {
   db.exec("ALTER TABLE messages ADD COLUMN media_id TEXT DEFAULT NULL");
 }
+if (!messageColumns.includes('chain_idx')) {
+  db.exec("ALTER TABLE messages ADD COLUMN chain_idx INTEGER DEFAULT NULL");
+}
 
 module.exports = db;
