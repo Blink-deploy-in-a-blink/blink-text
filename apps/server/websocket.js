@@ -3,10 +3,15 @@
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 const db = require('./db');
 const { validateEncryptedMessage, validateKeyExchange } = require('@blink-text/shared');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.join(__dirname, 'uploads');
 
 /**
  * Registers all Socket.io event handlers on the given io instance.
@@ -212,11 +217,30 @@ function registerSocketHandlers(io) {
 
       try {
         if (mode === 'for_everyone') {
-          const message = db.prepare('SELECT sender_id FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, conversationId);
+          const message = db.prepare('SELECT sender_id, media_id FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, conversationId);
           if (!message || message.sender_id !== userId) {
             if (typeof ack === 'function') ack({ error: 'Cannot delete others\' messages for everyone' });
             return;
           }
+
+          // Clean up associated media file from disk and DB if present
+          if (message.media_id) {
+            try {
+              const media = db.prepare('SELECT file_path FROM media WHERE id = ?').get(message.media_id);
+              if (media) {
+                const filePath = path.join(UPLOADS_DIR, media.file_path);
+                if (fs.existsSync(filePath)) {
+                  fs.unlinkSync(filePath);
+                  console.log(`[WS] Deleted media file: ${filePath}`);
+                }
+                db.prepare('DELETE FROM media WHERE id = ?').run(message.media_id);
+              }
+            } catch (mediaErr) {
+              console.error('[WS] Failed to clean up media:', mediaErr);
+              // Continue with message deletion even if media cleanup fails
+            }
+          }
+
           db.prepare('DELETE FROM messages WHERE id = ?').run(messageId);
           // Broadcast to all participants so they remove it in real time
           io.to(conversationId).emit('message_deleted', { conversationId, messageId, mode: 'for_everyone' });

@@ -6,12 +6,14 @@ import { getSocket, joinConversation } from './services/socket.js';
 import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
 import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
+import { forwardMessage } from './services/forwardService.js';
 import Login from './components/Login.jsx';
 import Register from './components/Register.jsx';
 import ConversationList from './components/ConversationList.jsx';
 import ChatWindow from './components/ChatWindow.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import NewConversationModal from './components/NewConversationModal.jsx';
+import ForwardModal from './components/ForwardModal.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: '#0f0f0f' },
@@ -41,6 +43,7 @@ function MessengerView({ user, logout }) {
   const [showNewModal, setShowNewModal] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
   const [editingMsg, setEditingMsg] = useState(null);
+  const [forwardingMsg, setForwardingMsg] = useState(null); // message to forward
   const conversationListRef = useRef(null);
   // Force re-render key for unread badges
   const [, setUnreadTick] = useState(0);
@@ -217,6 +220,15 @@ function MessengerView({ user, logout }) {
     }
   };
 
+  const handleForward = async (msg, targetConversationId) => {
+    try {
+      await forwardMessage(msg, activeConversation.id, targetConversationId, user.id);
+    } catch (err) {
+      console.error('Forward failed:', err);
+      throw err; // re-throw so ForwardModal can handle it
+    }
+  };
+
   // On mobile: show sidebar when no conversation selected, show chat when one is selected
   const showSidebar = !isMobile || !activeConversation;
   const showChat = !isMobile || !!activeConversation;
@@ -255,6 +267,7 @@ function MessengerView({ user, logout }) {
             onDeleteMessage={deleteMessage}
             onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
             onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
+            onForward={(msg) => setForwardingMsg(msg)}
             onNewConversation={() => setShowNewModal(true)}
             onBack={isMobile ? handleBack : null}
           />
@@ -277,6 +290,16 @@ function MessengerView({ user, logout }) {
           currentUser={user}
           onClose={() => setShowNewModal(false)}
           onCreated={handleNewConversation}
+        />
+      )}
+
+      {forwardingMsg && (
+        <ForwardModal
+          message={forwardingMsg}
+          currentUserId={user.id}
+          currentConversationId={activeConversation?.id}
+          onForward={handleForward}
+          onClose={() => setForwardingMsg(null)}
         />
       )}
     </div>

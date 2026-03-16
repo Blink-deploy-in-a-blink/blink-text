@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { downloadMedia } from '../services/api.js';
 import { decryptMediaForConversation } from '../services/cryptoService.js';
+import MediaPreviewModal from './MediaPreviewModal.jsx';
 
 const s = {
   window: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
@@ -101,7 +102,7 @@ function parseMediaMeta(plaintext) {
 }
 
 /** Decrypts and loads media for display */
-function MediaBubble({ msg, mine, conversationId }) {
+function MediaBubble({ msg, mine, conversationId, onPreview }) {
   const [objectUrl, setObjectUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -190,7 +191,9 @@ function MediaBubble({ msg, mine, conversationId }) {
           </div>
         )}
         {objectUrl && (
-          <img src={objectUrl} alt={meta.fileName} style={s.mediaImg} onClick={handleDownload} title="Click to download" />
+          <img src={objectUrl} alt={meta.fileName} style={s.mediaImg}
+            onClick={() => onPreview?.({ objectUrl, mimeType: meta.mimeType, fileName: meta.fileName, messageType: 'image' })}
+            title="Click to preview" />
         )}
         <div style={{ padding: '0.3rem 0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: '0.7rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -225,7 +228,8 @@ function MediaBubble({ msg, mine, conversationId }) {
           </div>
         )}
         {objectUrl && (
-          <video controls style={s.mediaVideo} preload="metadata">
+          <video controls style={s.mediaVideo} preload="metadata"
+            onDoubleClick={() => onPreview?.({ objectUrl, mimeType: meta.mimeType || 'video/mp4', fileName: meta.fileName, messageType: 'video' })}>
             <source src={objectUrl} type={meta.mimeType || 'video/mp4'} />
           </video>
         )}
@@ -233,7 +237,13 @@ function MediaBubble({ msg, mine, conversationId }) {
           <span style={{ fontSize: '0.7rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {meta.fileName}
           </span>
-          {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}>⬇</button>}
+          <div style={{ display: 'flex', gap: '0.3rem' }}>
+            {objectUrl && <button style={s.downloadBtn}
+              onClick={() => onPreview?.({ objectUrl, mimeType: meta.mimeType || 'video/mp4', fileName: meta.fileName, messageType: 'video' })}>
+              ⛶
+            </button>}
+            {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}>⬇</button>}
+          </div>
         </div>
       </div>
     );
@@ -242,11 +252,12 @@ function MediaBubble({ msg, mine, conversationId }) {
   return null;
 }
 
-export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onNewConversation, onBack }) {
+export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onNewConversation, onBack }) {
   const bottomRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y, msg }
   const [hoveredId, setHoveredId] = useState(null);
+  const [previewMedia, setPreviewMedia] = useState(null); // { objectUrl, mimeType, fileName, messageType }
   const longPressTimer = useRef(null);
   const isInitialLoad = useRef(true);
   const prevMessagesLen = useRef(0);
@@ -340,6 +351,35 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
     if (action === 'delete_all') onDeleteMessage?.(msg.id, 'for_everyone');
     if (action === 'edit') onEditMessage?.(msg);
     if (action === 'reply') onReply?.(msg);
+    if (action === 'forward') onForward?.(msg);
+    if (action === 'download') {
+      // For media messages, trigger a download of the media content
+      const meta = parseMediaMeta(msg.plaintext);
+      const fileName = meta?.fileName || 'download';
+      // The MediaBubble may have already loaded the blob — we need to re-download & decrypt
+      (async () => {
+        try {
+          if (!msg.mediaId) return;
+          const { data: encryptedData, iv: ivBase64 } = await downloadMedia(msg.mediaId);
+          const ivBinary = atob(ivBase64);
+          const iv = new Uint8Array(ivBinary.length);
+          for (let i = 0; i < ivBinary.length; i++) iv[i] = ivBinary.charCodeAt(i);
+          const decrypted = await decryptMediaForConversation(conversation.id, encryptedData, iv);
+          const mimeType = meta?.mimeType || 'application/octet-stream';
+          const blob = new Blob([decrypted], { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error('Download failed:', err);
+        }
+      })();
+    }
   };
 
   // Find the replied-to message text
@@ -450,7 +490,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                   <div style={s.replyQuote}>↩ {replyText}</div>
                 )}
                 {(msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'voice') && msg.mediaId ? (
-                  <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} />
+                  <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} onPreview={setPreviewMedia} />
                 ) : (
                   <div style={msg.plaintext === '[unable to decrypt]'
                     ? { ...s.bubble(mine), background: '#1a1a2e', border: '1px dashed #333', fontStyle: 'italic', color: '#666', fontSize: '0.82rem' }
@@ -478,12 +518,26 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
             onClick={() => handleAction('reply')}>
             ↩ Reply
           </button>
+          <button style={s.menuItem}
+            onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
+            onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+            onClick={() => handleAction('forward')}>
+            ➡ Forward
+          </button>
           {menu.msg.senderId === myUserId && menu.msg.messageType !== 'image' && menu.msg.messageType !== 'video' && menu.msg.messageType !== 'voice' && (
             <button style={s.menuItem}
               onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
               onMouseLeave={(e) => (e.target.style.background = 'transparent')}
               onClick={() => handleAction('edit')}>
               ✏️ Edit
+            </button>
+          )}
+          {(menu.msg.messageType === 'image' || menu.msg.messageType === 'video' || menu.msg.messageType === 'voice') && menu.msg.mediaId && (
+            <button style={s.menuItem}
+              onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
+              onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+              onClick={() => handleAction('download')}>
+              ⬇ Download
             </button>
           )}
           <button style={s.menuItem}
@@ -501,6 +555,26 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
             </button>
           )}
         </div>
+      )}
+
+      {/* Media preview modal */}
+      {previewMedia && (
+        <MediaPreviewModal
+          objectUrl={previewMedia.objectUrl}
+          mimeType={previewMedia.mimeType}
+          fileName={previewMedia.fileName}
+          messageType={previewMedia.messageType}
+          onClose={() => setPreviewMedia(null)}
+          onDownload={() => {
+            if (!previewMedia.objectUrl) return;
+            const a = document.createElement('a');
+            a.href = previewMedia.objectUrl;
+            a.download = previewMedia.fileName || 'download';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }}
+        />
       )}
     </div>
   );
