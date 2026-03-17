@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { downloadMedia } from '../services/api.js';
 import { decryptMediaForConversation } from '../services/cryptoService.js';
 import MediaPreviewModal from './MediaPreviewModal.jsx';
@@ -257,6 +257,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const bottomRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y, msg }
+  const menuRef = useRef(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [previewMedia, setPreviewMedia] = useState(null); // { objectUrl, mimeType, fileName, messageType }
   const longPressTimer = useRef(null);
@@ -334,18 +335,26 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
     return () => window.removeEventListener('click', close);
   }, [menu]);
 
+  // After the menu renders, measure its actual height and flip upward if it overflows the viewport.
+  // useLayoutEffect fires before the browser paints, so there's no visible flash.
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return;
+    const el = menuRef.current;
+    const elRect = el.getBoundingClientRect();
+    if (elRect.bottom > window.innerHeight - 8) {
+      const correctedY = Math.max(8, window.innerHeight - 8 - elRect.height);
+      setMenu(prev => prev ? { ...prev, y: correctedY } : null);
+    }
+  }, [menu?.msg?.id]); // only re-run when a new menu is opened, not on every y update
+
   const openMenu = (e, msg) => {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
     const menuWidth = 180; // matches minWidth in s.menu
-    const menuHeight = 280; // conservative estimate for max menu items
     // Clamp so the menu doesn't overflow the right edge of the viewport
     const x = Math.min(rect.left, window.innerWidth - menuWidth - 8);
-    // If the menu would overflow the bottom, flip it upward
-    let y = rect.bottom + 4;
-    if (y + menuHeight > window.innerHeight) {
-      y = Math.max(8, rect.top - menuHeight - 4);
-    }
+    // Place below the button; useLayoutEffect will flip upward if needed
+    const y = rect.bottom + 4;
     setMenu({ x, y, msg });
   };
 
@@ -474,12 +483,8 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 const touch = e.touches[0];
                 longPressTimer.current = setTimeout(() => {
                   const menuWidth = 180;
-                  const menuHeight = 280;
                   const x = Math.min(touch.clientX, window.innerWidth - menuWidth - 8);
-                  let y = touch.clientY;
-                  if (y + menuHeight > window.innerHeight) {
-                    y = Math.max(8, y - menuHeight);
-                  }
+                  const y = touch.clientY;
                   setMenu({ x, y, msg });
                 }, 500);
               }}
@@ -523,7 +528,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
       </div>
 
       {menu && (
-        <div style={{ ...s.menu, left: menu.x, top: menu.y }}>
+        <div ref={menuRef} style={{ ...s.menu, left: menu.x, top: menu.y }}>
           <button style={s.menuItem}
             onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
             onMouseLeave={(e) => (e.target.style.background = 'transparent')}
