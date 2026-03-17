@@ -68,7 +68,7 @@ const s = {
   },
 };
 
-const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser, isMobile, getUnreadCount }, ref) {
+const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser, isMobile, getUnreadCount, isAdmin, onOpenAdmin }, ref) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
@@ -319,6 +319,15 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
               )}
             </div>
           </div>
+        )}
+
+        {isAdmin && (
+          <button
+            style={{ ...s.logoutBtn, color: '#818cf8', borderColor: '#818cf833', marginBottom: '0.25rem' }}
+            onClick={onOpenAdmin}
+          >
+            🛡️ Admin Dashboard
+          </button>
         )}
 
         <button style={s.logoutBtn} onClick={() => setShowLogoutConfirm(true)}>Sign Out</button>

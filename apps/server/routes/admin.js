@@ -17,6 +17,14 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// GET /api/admin/verify — check if the current user is an admin.
+// This is the ONLY way the client discovers admin status.
+// The check hits the DB directly on every call — never trusts client-side data.
+// Returns 200 { admin: true } for admins, 403 for everyone else.
+router.get('/verify', authenticateToken, requireAdmin, (_req, res) => {
+  return res.json({ admin: true });
+});
+
 // GET /api/admin/stats — dashboard statistics
 router.get('/stats', authenticateToken, requireAdmin, (_req, res) => {
   try {

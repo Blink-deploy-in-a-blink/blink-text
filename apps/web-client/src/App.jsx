@@ -6,6 +6,7 @@ import { getSocket, joinConversation } from './services/socket.js';
 import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
 import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
+import { verifyAdmin } from './services/api.js';
 import { forwardMessage } from './services/forwardService.js';
 import Login from './components/Login.jsx';
 import Register from './components/Register.jsx';
@@ -47,12 +48,23 @@ function MessengerView({ user, logout }) {
   const [editingMsg, setEditingMsg] = useState(null);
   const [forwardingMsg, setForwardingMsg] = useState(null); // message to forward
   const [reportTarget, setReportTarget] = useState(null); // { userId, username, conversationId, messageId }
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  // Admin status is fetched fresh from the server on every mount.
+  // NEVER stored in localStorage — always verified against the DB via /api/admin/verify.
+  const [isAdmin, setIsAdmin] = useState(false);
   const conversationListRef = useRef(null);
   // Force re-render key for unread badges
   const [, setUnreadTick] = useState(0);
 
   // Background preload all conversations' keys + messages
   useBackgroundPreloader(user.id);
+
+  // Check admin status fresh from server on every mount.
+  // This calls GET /api/admin/verify which checks the DB directly.
+  // Never trusts client-side data — the server is the only source of truth.
+  useEffect(() => {
+    verifyAdmin().then(setIsAdmin);
+  }, []);
 
   // Listen for unread count changes to re-render conversation list badges
   useEffect(() => {
@@ -259,48 +271,56 @@ function MessengerView({ user, logout }) {
 
   return (
     <div style={appStyles.app}>
-      {showSidebar && (
-        <ConversationList
-          ref={conversationListRef}
-          activeConversationId={activeConversation?.id}
-          onSelect={handleSelectConversation}
-          onNewConversation={() => setShowNewModal(true)}
-          onLogout={logout}
-          currentUser={user}
-          isMobile={isMobile}
-          getUnreadCount={getUnreadCount}
-        />
-      )}
-      {showChat && (
-        <div style={appStyles.main}>
-          <ChatWindow
-            conversation={activeConversation}
-            messages={messages}
-            myUserId={user.id}
-            loading={msgLoading}
-            loadingMore={loadingMore}
-            hasMore={hasMore}
-            onLoadMore={loadMore}
-            onDeleteMessage={deleteMessage}
-            onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
-            onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
-            onForward={(msg) => setForwardingMsg(msg)}
-            onReport={handleReport}
-            onNewConversation={() => setShowNewModal(true)}
-            onBack={isMobile ? handleBack : null}
-          />
-          <MessageInput
-            onSend={handleSend}
-            onSendMedia={handleSendMedia}
-            onSaveEdit={handleSaveEdit}
-            disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
-            replyTo={replyTo}
-            editingMsg={editingMsg}
-            onCancelReply={() => setReplyTo(null)}
-            onCancelEdit={() => setEditingMsg(null)}
-            peerDeleted={!!activeConversation?.has_deleted_participant}
-          />
-        </div>
+      {showAdminPanel ? (
+        <AdminPanel onClose={() => setShowAdminPanel(false)} />
+      ) : (
+        <>
+          {showSidebar && (
+            <ConversationList
+              ref={conversationListRef}
+              activeConversationId={activeConversation?.id}
+              onSelect={handleSelectConversation}
+              onNewConversation={() => setShowNewModal(true)}
+              onLogout={logout}
+              currentUser={user}
+              isMobile={isMobile}
+              getUnreadCount={getUnreadCount}
+              isAdmin={isAdmin}
+              onOpenAdmin={() => setShowAdminPanel(true)}
+            />
+          )}
+          {showChat && (
+            <div style={appStyles.main}>
+              <ChatWindow
+                conversation={activeConversation}
+                messages={messages}
+                myUserId={user.id}
+                loading={msgLoading}
+                loadingMore={loadingMore}
+                hasMore={hasMore}
+                onLoadMore={loadMore}
+                onDeleteMessage={deleteMessage}
+                onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
+                onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
+                onForward={(msg) => setForwardingMsg(msg)}
+                onReport={handleReport}
+                onNewConversation={() => setShowNewModal(true)}
+                onBack={isMobile ? handleBack : null}
+              />
+              <MessageInput
+                onSend={handleSend}
+                onSendMedia={handleSendMedia}
+                onSaveEdit={handleSaveEdit}
+                disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
+                replyTo={replyTo}
+                editingMsg={editingMsg}
+                onCancelReply={() => setReplyTo(null)}
+                onCancelEdit={() => setEditingMsg(null)}
+                peerDeleted={!!activeConversation?.has_deleted_participant}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {showNewModal && (

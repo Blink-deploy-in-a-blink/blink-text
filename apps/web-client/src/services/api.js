@@ -31,7 +31,9 @@ api.interceptors.response.use(
       (error.response.status === 401 || error.response.status === 403) &&
       // Don't auto-logout on login/register failures
       !error.config.url?.includes('/api/auth/login') &&
-      !error.config.url?.includes('/api/auth/register')
+      !error.config.url?.includes('/api/auth/register') &&
+      // Don't auto-logout when admin verify returns 403 (normal for non-admins)
+      !error.config.url?.includes('/api/admin/')
     ) {
       isLoggingOut = true;
       console.warn('[api] Token expired or invalid — clearing session');
@@ -103,7 +105,24 @@ export const refreshToken = () =>
 export const submitReport = (reportedUserId, reason, { conversationId, messageId, details } = {}) =>
   api.post('/api/reports', { reportedUserId, reason, conversationId, messageId, details }).then((r) => r.data);
 
-// Admin API
+// Admin API — all these endpoints are protected server-side by requireAdmin middleware.
+// The client discovers admin status ONLY via verifyAdmin(), which hits the DB on every call.
+// Admin status is NEVER sent in auth responses or stored in localStorage.
+
+/**
+ * Check if the current user is an admin. Hits the server DB directly.
+ * Returns true if admin, false if not (403 response = not admin).
+ * This is the ONLY source of truth for admin status on the client.
+ */
+export const verifyAdmin = async () => {
+  try {
+    await api.get('/api/admin/verify');
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const getAdminStats = () =>
   api.get('/api/admin/stats').then((r) => r.data);
 
