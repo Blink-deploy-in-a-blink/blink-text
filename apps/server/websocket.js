@@ -13,16 +13,58 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(__dirname, 'uploads');
 
+// WebSocket rate limiting: max messages per window per user
+const WS_RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
+const WS_RATE_LIMIT_MAX = 30;           // max 30 messages per window
+
+/**
+ * Simple in-memory rate limiter for WebSocket events.
+ * Returns true if the event should be allowed, false if rate-limited.
+ * Periodically cleans up expired buckets to avoid unbounded memory growth.
+ */
+function createWsRateLimiter() {
+  const buckets = new Map(); // userId -> { count, resetAt }
+  // Clean up expired buckets every 60 seconds
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, bucket] of buckets) {
+      if (now >= bucket.resetAt) buckets.delete(key);
+    }
+  }, 60_000);
+  cleanupInterval.unref(); // don't keep the process alive for cleanup
+
+  return function isAllowed(userId) {
+    const now = Date.now();
+    let bucket = buckets.get(userId);
+    if (!bucket || now >= bucket.resetAt) {
+      bucket = { count: 0, resetAt: now + WS_RATE_LIMIT_WINDOW_MS };
+      buckets.set(userId, bucket);
+    }
+    bucket.count++;
+    return bucket.count <= WS_RATE_LIMIT_MAX;
+  };
+}
+
 /**
  * Registers all Socket.io event handlers on the given io instance.
  * @param {import('socket.io').Server} io
  */
 function registerSocketHandlers(io) {
+  const wsRateCheck = createWsRateLimiter();
+
   io.use((socket, next) => {
     const token = socket.handshake.auth && socket.handshake.auth.token;
     if (!token) return next(new Error('Authentication token required'));
     jwt.verify(token, JWT_SECRET, (err, user) => {
       if (err) return next(new Error('Invalid or expired token'));
+
+      // Check ban/deletion status in DB so bans take effect immediately,
+      // even if the JWT hasn't expired yet.
+      const dbUser = db.prepare('SELECT is_banned, deleted_at FROM users WHERE id = ?').get(user.id);
+      if (!dbUser) return next(new Error('User not found'));
+      if (dbUser.is_banned) return next(new Error('Account suspended'));
+      if (dbUser.deleted_at) return next(new Error('Account deleted'));
+
       socket.user = user;
       next();
     });
@@ -70,6 +112,12 @@ function registerSocketHandlers(io) {
 
     // send_message: validate, persist, relay encrypted message using EncryptedMessage format
     socket.on('send_message', (msg, ack) => {
+      // Rate limit: reject if user is sending too fast
+      if (!wsRateCheck(userId)) {
+        if (typeof ack === 'function') ack({ error: 'Rate limit exceeded. Please slow down.' });
+        return;
+      }
+
       // Build the validated payload from only the fields we trust.
       // conversationId, id, timestamp, and payload come from the client;
       // senderId is always taken from the authenticated socket user.
@@ -131,7 +179,18 @@ function registerSocketHandlers(io) {
       }
     });
 
-    socket.on('key_exchange', (payload) => {
+    socket.on('key_exchange', (payload, ack) => {
+      if (!wsRateCheck(userId)) {
+        // Key exchange is critical for conversation setup — notify the sender
+        // so the client can back off and retry instead of getting stuck.
+        if (typeof ack === 'function') {
+          ack({ error: 'Rate limit exceeded. Please slow down.' });
+        } else {
+          socket.emit('error', { message: 'Rate limit exceeded for key_exchange' });
+        }
+        return;
+      }
+
       const normalized = { ...payload, userId };
       const { valid } = validateKeyExchange(normalized);
       if (!valid) return;
@@ -166,6 +225,11 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('edit_message', ({ conversationId, messageId, payload: encPayload }, ack) => {
+      if (!wsRateCheck(userId)) {
+        if (typeof ack === 'function') ack({ error: 'Rate limit exceeded. Please slow down.' });
+        return;
+      }
+
       if (!conversationId || !messageId || !encPayload) {
         if (typeof ack === 'function') ack({ error: 'Missing fields' });
         return;

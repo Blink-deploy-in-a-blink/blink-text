@@ -8,19 +8,21 @@
 ## Table of Contents
 
 1. [How it works](#how-it-works)
-2. [Architecture](#architecture)
-3. [Prerequisites](#prerequisites)
-4. [Repo structure](#repo-structure)
-5. [Quick start — local development](#quick-start--local-development)
-6. [Deploying on your LAN](#deploying-on-your-lan)
-7. [Deploying to AWS EC2 (production)](#deploying-to-aws-ec2-production)
-8. [Environment variables](#environment-variables)
-9. [Scripts reference](#scripts-reference)
-10. [API reference](#api-reference)
-11. [WebSocket events](#websocket-events)
-12. [Manual testing walkthrough](#manual-testing-walkthrough)
-13. [Running with Docker](#running-with-docker)
-14. [Security notes](#security-notes)
+2. [Features](#features)
+3. [Architecture](#architecture)
+4. [Prerequisites](#prerequisites)
+5. [Repo structure](#repo-structure)
+6. [Quick start — local development](#quick-start--local-development)
+7. [Admin setup](#admin-setup)
+8. [Deploying on your LAN](#deploying-on-your-lan)
+9. [Deploying to AWS EC2 (production)](#deploying-to-aws-ec2-production)
+10. [Environment variables](#environment-variables)
+11. [Scripts reference](#scripts-reference)
+12. [API reference](#api-reference)
+13. [WebSocket events](#websocket-events)
+14. [Manual testing walkthrough](#manual-testing-walkthrough)
+15. [Running with Docker](#running-with-docker)
+16. [Security notes](#security-notes)
 
 ---
 
@@ -45,6 +47,48 @@ Alice types a message
 ```
 
 **Key exchange** happens once per conversation using ECDH P-256. Each device generates an ephemeral keypair, shares the public half via the server, and derives a shared `AES-256-GCM` key locally using HKDF-SHA-256. The server never touches the private keys or the derived key.
+
+---
+
+## Features
+
+### Core Messaging
+- **End-to-end encrypted messaging** — AES-256-GCM, ECDH P-256 key exchange, HKDF-SHA-256 key derivation
+- **Direct messages & group chats** — create conversations with one or multiple users
+- **Real-time delivery** — Socket.io WebSocket transport with instant message relay
+- **Message editing** — edit sent messages (re-encrypted, relayed to all participants)
+- **Message deletion** — delete for yourself or delete for everyone
+- **Message forwarding** — forward text or media messages to other conversations
+- **Reply-to / quoting** — reply to specific messages with inline context
+
+### Media
+- **Encrypted media sharing** — send images and files, encrypted client-side before upload
+- **Media preview modal** — full-screen lightbox with zoom for images
+- **Download original** — download decrypted media files to disk
+
+### Trust & Safety
+- **Proof-of-Work anti-spam** — SHA-256 puzzle (difficulty 18) required at registration to block bots
+- **Terms of Service & Privacy Policy** — users must accept ToS before creating an account
+- **User reporting** — report users with reason, linked to specific messages/conversations
+- **Admin dashboard** — full moderation panel (see [Admin setup](#admin-setup))
+- **Ban / unban users** — banned users are blocked from API and WebSocket access immediately
+- **Registration IP logging** — stored for abuse investigation (admin-visible only)
+- **WebSocket rate limiting** — per-event rate limits to prevent message flooding
+- **REST API rate limiting** — 20 auth requests / 15 min; 200 general requests / min
+
+### Account Management
+- **Secure registration** — bcrypt password hashing, PoW challenge, ToS acceptance
+- **Token refresh** — 30-day JWT with auto-refresh on app open
+- **Password change** — change password while logged in
+- **Account deletion** — permanently delete your account and optionally all conversations
+- **Session management** — automatic logout on token expiry, tab-close detection
+
+### Admin & Moderation
+- **Admin CLI** — promote/demote users via server-side command line (no API endpoint for security)
+- **Admin panel** — browser-based dashboard with platform stats, user management, and report queue
+- **Report review queue** — review, resolve, or dismiss user reports
+- **User search & filtering** — search users, filter by active/banned/deleted status
+- **Ban enforcement** — bans checked on every authenticated request and WebSocket connection
 
 ---
 
@@ -75,12 +119,15 @@ The same engine can be plugged into a React app (browser provider), a CLI tool (
 
 | Table | Purpose |
 |---|---|
-| `users` | Username + bcrypt password hash |
+| `users` | Username, bcrypt password hash, admin/banned flags, registration IP, soft-delete |
 | `devices` | Per-device ECDSA identity key + ECDH public key |
 | `conversations` | `direct_message` or `group_chat` |
 | `conversation_participants` | Many-to-many user ↔ conversation |
-| `messages` | Encrypted payloads only (`ciphertext`, `iv`, `version`) |
+| `messages` | Encrypted payloads only (`ciphertext`, `iv`, `version`), message type, media references |
+| `message_deletions` | Tracks per-user "delete for me" soft deletes |
 | `key_exchange_data` | Ephemeral ECDH public keys used to bootstrap conversation keys |
+| `media` | Metadata for encrypted media uploads (file path, IV, size) |
+| `reports` | User reports with reason, linked message/conversation, review status |
 
 ---
 
@@ -105,23 +152,47 @@ No database server needed — SQLite is embedded.
 │   │   ├── app.js              Express app (helmet, CORS, rate-limit, routes)
 │   │   ├── auth.js             JWT middleware + token signing
 │   │   ├── db.js               SQLite setup + schema migration
-│   │   ├── websocket.js        Socket.io handlers
+│   │   ├── websocket.js        Socket.io handlers (messages, key exchange, edit, delete)
+│   │   ├── admin-cli.js        CLI tool to promote/demote admin users
 │   │   ├── routes/
-│   │   │   ├── auth.js         POST /api/auth/register|login
-│   │   │   ├── conversations.js GET/POST /api/conversations
+│   │   │   ├── auth.js         POST /api/auth/register|login|refresh + PoW challenge
+│   │   │   ├── conversations.js GET/POST /api/conversations + messages
 │   │   │   ├── devices.js      GET/POST /api/devices
 │   │   │   ├── keys.js         GET/POST /api/keys/exchange
+│   │   │   ├── media.js        POST /api/media/upload + GET /api/media/:id
+│   │   │   ├── reports.js      POST /api/reports (user reporting)
+│   │   │   ├── admin.js        /api/admin/* (stats, users, reports, ban/unban)
 │   │   │   └── users.js        GET /api/users/search
 │   │   └── .env.example
 │   └── web-client/
+│       ├── public/
+│       │   └── pow-worker.js   Web Worker for Proof-of-Work solving
 │       ├── src/
 │       │   ├── App.jsx
-│       │   ├── components/     Login, Register, ChatWindow, ConversationList, …
-│       │   ├── hooks/          useAuth, useMessages
+│       │   ├── components/
+│       │   │   ├── Login.jsx
+│       │   │   ├── Register.jsx          Registration with ToS + PoW
+│       │   │   ├── ChatWindow.jsx        Message display, context menus
+│       │   │   ├── ConversationList.jsx
+│       │   │   ├── MessageInput.jsx      Text + media input with reply/edit
+│       │   │   ├── NewConversationModal.jsx
+│       │   │   ├── ForwardModal.jsx      Forward messages to conversations
+│       │   │   ├── MediaPreviewModal.jsx Fullscreen image lightbox
+│       │   │   ├── ReportModal.jsx       Report users with reason
+│       │   │   ├── AdminPanel.jsx        Admin dashboard UI
+│       │   │   ├── TermsOfService.jsx    Terms of Service page
+│       │   │   └── PrivacyPolicy.jsx     Privacy Policy page
+│       │   ├── hooks/
+│       │   │   ├── useAuth.js            Auth state + PoW registration flow
+│       │   │   ├── useMessages.js        Message state + WebSocket listeners
+│       │   │   └── useBackgroundPreloader.js
 │       │   └── services/
-│       │       ├── api.js      Axios REST calls
-│       │       ├── socket.js   Socket.io client
-│       │       └── cryptoService.js  Browser-side E2E crypto
+│       │       ├── api.js                Axios REST calls
+│       │       ├── socket.js             Socket.io client
+│       │       ├── cryptoService.js      Browser-side E2E crypto
+│       │       ├── messageCache.js       Local message cache + unread counts
+│       │       ├── forwardService.js     Forward message logic
+│       │       └── powService.js         PoW solver (wraps Web Worker)
 │       └── vite.config.js
 ├── packages/
 │   ├── crypto/
@@ -217,6 +288,57 @@ Open **two separate browser windows** (or one normal + one incognito tab):
 3. In **Window 1** → Click **New conversation**, search for `bob`, select Direct Message, click Create
 4. Type a message and press **Enter** or click **Send**
 5. Switch to **Window 2** — Bob's window will receive and decrypt the message in real time
+
+---
+
+## Admin setup
+
+Admin users can access the **Admin Panel** in the web client, which provides platform statistics, user management (search, ban/unban), and a report review queue.
+
+### Why CLI-only?
+
+There is **no API endpoint** to grant admin access. This is intentional — only the server operator with direct shell access should be able to promote users. This eliminates privilege escalation attacks via the API.
+
+### Promote a user to admin
+
+After a user has registered through the web client, SSH into your server and run:
+
+```bash
+cd apps/server
+node admin-cli.js promote <username>
+```
+
+Example:
+```bash
+node admin-cli.js promote alice
+# ✅ User "alice" has been promoted to admin.
+```
+
+### Demote an admin
+
+```bash
+node admin-cli.js demote <username>
+```
+
+### List all admins
+
+```bash
+node admin-cli.js list
+# Admin users (1):
+#   • alice (registered 2026-03-15)
+```
+
+### Using the Admin Panel
+
+Once promoted, refresh the web client. An **⚙️ Admin** button appears in the sidebar. The panel includes:
+
+| Tab | What it shows |
+|---|---|
+| **Overview** | Total users, conversations, messages, reports, active sessions |
+| **Reports** | Pending user reports with reason, reporter, reported user, timestamps. Resolve or dismiss reports. |
+| **Users** | Searchable user list with status (active/banned/deleted), registration IP, report count. Ban or unban users. |
+
+> **Note on Windows:** Use `node admin-cli.js` (not `npm` scripts) to run the CLI directly. On PowerShell, `npm.cmd` works but is not required for this tool.
 
 ---
 
@@ -452,22 +574,47 @@ All endpoints (except `/health`) return JSON. Authenticated routes require the h
 Authorization: Bearer <token>
 ```
 
-Tokens are returned by `/api/auth/register` and `/api/auth/login` and expire after **24 hours**.
+Tokens are returned by `/api/auth/register` and `/api/auth/login` and expire after **30 days** (auto-refreshed on app open).
 
 ---
 
 ### Authentication
 
+#### `GET /api/auth/pow-challenge`
+
+Get a Proof-of-Work challenge for registration. Must be solved before the registration request.
+
+**Response `200`:**
+```json
+{
+  "challenge": "<random-hex-string>",
+  "difficulty": 18
+}
+```
+
+The client must find a `nonce` such that `SHA-256(challenge + nonce)` has at least `difficulty` leading zero bits. Challenges expire after 5 minutes and can only be used once.
+
+---
+
 #### `POST /api/auth/register`
 
-Register a new user.
+Register a new user. Requires a solved PoW challenge and ToS acceptance.
 
 **Request body:**
 ```json
-{ "username": "alice", "password": "hunter2hunter" }
+{
+  "username": "alice",
+  "password": "hunter2hunter",
+  "powChallenge": "<challenge from /pow-challenge>",
+  "powNonce": 12345,
+  "acceptedTerms": true
+}
 ```
 - `username`: 3–32 characters, alphanumeric + underscores only
 - `password`: minimum 8 characters
+- `powChallenge`: the challenge string from `/api/auth/pow-challenge`
+- `powNonce`: the nonce that solves the PoW puzzle
+- `acceptedTerms`: must be `true`
 
 **Response `201`:**
 ```json
@@ -655,6 +802,157 @@ Search for users by username (partial match, up to 20 results, excludes yourself
 
 ---
 
+### Account Management
+
+#### `POST /api/auth/refresh` 🔒
+
+Refresh the current JWT token. Returns a new token with a fresh 30-day expiry.
+
+**Response `200`:**
+```json
+{ "token": "<new-jwt>" }
+```
+
+---
+
+#### `PUT /api/auth/password` 🔒
+
+Change the current user's password.
+
+**Request body:**
+```json
+{ "currentPassword": "old_password", "newPassword": "new_password" }
+```
+
+---
+
+#### `DELETE /api/auth/account` 🔒
+
+Delete the current user's account. Soft-deletes the user (sets `deleted_at`).
+
+**Request body:**
+```json
+{ "password": "current_password", "deleteConversations": false }
+```
+
+---
+
+### Media
+
+#### `POST /api/media/upload` 🔒
+
+Upload an encrypted media file. Uses `multipart/form-data`.
+
+**Form fields:**
+- `file`: the encrypted binary data
+- `conversationId`: UUID of the conversation
+- `iv`: base64-encoded IV used for encryption
+
+**Response `201`:**
+```json
+{ "mediaId": "<uuid>", "fileSize": 1234567 }
+```
+
+---
+
+#### `GET /api/media/:id` 🔒
+
+Download an encrypted media file. Returns the raw binary data with metadata headers.
+
+**Response headers:**
+- `X-Media-IV`: base64-encoded IV
+- `X-Media-Version`: encryption version (e.g. `v1`)
+
+---
+
+### Reports
+
+#### `POST /api/reports` 🔒
+
+Report a user for abuse.
+
+**Request body:**
+```json
+{
+  "reportedUserId": "<uuid>",
+  "reason": "spam",
+  "conversationId": "<uuid>",
+  "messageId": "<uuid>",
+  "details": "Optional additional context"
+}
+```
+- `reason`: one of `spam`, `harassment`, `illegal_content`, `other`
+- `conversationId`, `messageId`, `details`: optional context
+
+---
+
+### Admin (requires admin privileges)
+
+All admin endpoints require `is_admin = 1` on the authenticated user.
+
+#### `GET /api/admin/verify` 🔒🛡️
+
+Check if the current user is an admin.
+
+**Response `200`:** `{ "admin": true }`  
+**Response `403`:** Not an admin.
+
+---
+
+#### `GET /api/admin/stats` 🔒🛡️
+
+Platform statistics.
+
+**Response `200`:**
+```json
+{
+  "totalUsers": 42,
+  "totalConversations": 15,
+  "totalMessages": 1337,
+  "totalReports": 3,
+  "pendingReports": 1
+}
+```
+
+---
+
+#### `GET /api/admin/users?search=&filter=&page=&limit=` 🔒🛡️
+
+Paginated user list with search and filter.
+
+- `filter`: `all` | `active` | `banned` | `deleted`
+
+---
+
+#### `GET /api/admin/reports?status=&page=&limit=` 🔒🛡️
+
+Paginated report list. Filter by `status`: `pending` | `reviewed` | `dismissed`.
+
+---
+
+#### `PUT /api/admin/reports/:reportId` 🔒🛡️
+
+Update report status.
+
+**Request body:**
+```json
+{ "status": "reviewed" }
+```
+
+---
+
+#### `POST /api/admin/ban/:userId` 🔒🛡️
+
+Ban a user. Immediately blocks all API and WebSocket access.
+
+---
+
+#### `POST /api/admin/unban/:userId` 🔒🛡️
+
+Unban a user.
+
+---
+
 ### Health
 
 #### `GET /health`
@@ -679,8 +977,12 @@ const socket = io('http://localhost:3001', { auth: { token: '<jwt>' } });
 | Event | Payload | Description |
 |---|---|---|
 | `join_conversation` | `{ conversationId }` | Subscribe to a conversation room to receive messages |
+| `leave_conversation` | `{ conversationId }` | Unsubscribe from a conversation room |
 | `send_message` | `EncryptedMessage` (see below) | Send an encrypted message; server validates, persists, and relays |
+| `edit_message` | `{ conversationId, messageId, payload }` | Edit a sent message (re-encrypted payload); server verifies ownership |
+| `delete_message` | `{ conversationId, messageId, mode }` | Delete a message. `mode`: `"for_me"` or `"for_everyone"` (sender only) |
 | `key_exchange` | `KeyExchangePayload` | Relay an ephemeral public key to other participants |
+| `key_confirm` | `KeyConfirmPayload` | Confirm key exchange completion to peers |
 
 **`EncryptedMessage` shape** (what you send to `send_message`):
 ```json
@@ -703,10 +1005,13 @@ const socket = io('http://localhost:3001', { auth: { token: '<jwt>' } });
 | Event | Payload | Description |
 |---|---|---|
 | `message` | `EncryptedMessage` | A new encrypted message was relayed to this conversation room |
+| `message_edited` | `{ conversationId, messageId, payload, editedAt }` | A message was edited by its sender |
+| `message_deleted` | `{ conversationId, messageId, deletedBy }` | A message was deleted for everyone |
 | `key_exchange` | `KeyExchangePayload` | A peer's ephemeral public key arrived |
+| `key_confirm` | `KeyConfirmPayload` | A peer confirmed key exchange |
 | `user_connected` | `{ userId, username }` | A user connected |
 | `user_disconnected` | `{ userId, username }` | A user disconnected |
-| `error` | `{ message }` | A server-side error (e.g., not a participant) |
+| `error` | `{ message }` | A server-side error (e.g., not a participant, rate limited) |
 
 ---
 
@@ -714,9 +1019,18 @@ const socket = io('http://localhost:3001', { auth: { token: '<jwt>' } });
 
 ### Test the REST API with curl
 
+> **Note:** Registration now requires a Proof-of-Work solution and ToS acceptance. For quick API testing, you can temporarily comment out the PoW check in `apps/server/routes/auth.js`, or use the web client which handles PoW automatically.
+
 ```bash
-# 1. Register Alice
-curl -s -X POST http://localhost:3001/api/auth/register \
+# 1. Get a PoW challenge
+curl -s http://localhost:3001/api/auth/pow-challenge | jq .
+# Returns: { "challenge": "...", "difficulty": 18 }
+
+# 2. Register Alice (via web client is easiest — PoW is solved automatically)
+#    Or temporarily disable PoW in routes/auth.js for curl testing.
+
+# 3. Login (no PoW required)
+curl -s -X POST http://localhost:3001/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"alice","password":"alicepass1"}' | jq .
 
@@ -724,15 +1038,7 @@ curl -s -X POST http://localhost:3001/api/auth/register \
 ALICE_TOKEN="<token from above>"
 ALICE_ID="<id from above>"
 
-# 2. Register Bob
-curl -s -X POST http://localhost:3001/api/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"bob","password":"bobpassword1"}' | jq .
-
-BOB_TOKEN="<token from above>"
-BOB_ID="<id from above>"
-
-# 3. Create a direct message conversation (as Alice)
+# 4. Create a direct message conversation (as Alice)
 curl -s -X POST http://localhost:3001/api/conversations \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $ALICE_TOKEN" \
@@ -740,8 +1046,12 @@ curl -s -X POST http://localhost:3001/api/conversations \
 
 CONV_ID="<id from above>"
 
-# 4. Check health
+# 5. Check health
 curl -s http://localhost:3001/health
+
+# 6. Promote Alice to admin (from server shell)
+cd apps/server
+node admin-cli.js promote alice
 ```
 
 ### Test the crypto engine from Node.js
@@ -839,15 +1149,21 @@ The database is persisted in a named Docker volume (`db_data`).
 | Feature | Implementation |
 |---|---|
 | Password hashing | `bcrypt` with 12 salt rounds |
-| Authentication | JWT (HS256), 24-hour expiry |
+| Authentication | JWT (HS256), 30-day expiry with auto-refresh |
 | Message encryption | AES-256-GCM with a random 12-byte IV per message |
 | Key exchange | ECDH P-256 + HKDF-SHA-256 (conversation ID as salt) |
 | Identity signing | ECDSA P-256 |
+| Anti-spam | Proof-of-Work (SHA-256, difficulty 18) required at registration |
 | Transport security | HTTPS/WSS via Cloudflare or reverse proxy (see [deployment guide](#deploying-to-aws-ec2-production)) |
 | Security headers | `helmet` (CSP, HSTS, X-Frame-Options, …) |
-| Rate limiting | 20 auth requests / 15 min; 200 general requests / min |
+| REST rate limiting | 20 auth requests / 15 min; 200 general requests / min |
+| WebSocket rate limiting | Per-event throttling (messages, key exchange) |
 | Input validation | `express-validator` on all endpoints |
 | CORS | Restricted to `CLIENT_ORIGIN` environment variable |
+| Ban enforcement | Checked on every authenticated API request and WebSocket connection |
+| Admin access | CLI-only promotion — no API endpoint can grant admin privileges |
+| IP logging | Registration IP stored for abuse investigation (admin-visible only) |
+| Terms of Service | Required acceptance at registration; server validates |
 
 **Private keys never leave the client.** The server stores only encrypted message payloads, public keys, and bcrypt hashes.
 

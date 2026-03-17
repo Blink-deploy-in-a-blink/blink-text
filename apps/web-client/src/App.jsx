@@ -6,6 +6,7 @@ import { getSocket, joinConversation } from './services/socket.js';
 import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
 import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
+import { verifyAdmin } from './services/api.js';
 import { forwardMessage } from './services/forwardService.js';
 import Login from './components/Login.jsx';
 import Register from './components/Register.jsx';
@@ -14,6 +15,10 @@ import ChatWindow from './components/ChatWindow.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import NewConversationModal from './components/NewConversationModal.jsx';
 import ForwardModal from './components/ForwardModal.jsx';
+import ReportModal from './components/ReportModal.jsx';
+import AdminPanel from './components/AdminPanel.jsx';
+import TermsOfService from './components/TermsOfService.jsx';
+import PrivacyPolicy from './components/PrivacyPolicy.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: '#0f0f0f' },
@@ -44,12 +49,24 @@ function MessengerView({ user, logout }) {
   const [replyTo, setReplyTo] = useState(null);
   const [editingMsg, setEditingMsg] = useState(null);
   const [forwardingMsg, setForwardingMsg] = useState(null); // message to forward
+  const [reportTarget, setReportTarget] = useState(null); // { userId, username, conversationId, messageId }
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  // Admin status is fetched fresh from the server on every mount.
+  // NEVER stored in localStorage — always verified against the DB via /api/admin/verify.
+  const [isAdmin, setIsAdmin] = useState(false);
   const conversationListRef = useRef(null);
   // Force re-render key for unread badges
   const [, setUnreadTick] = useState(0);
 
   // Background preload all conversations' keys + messages
   useBackgroundPreloader(user.id);
+
+  // Check admin status fresh from server on every mount.
+  // This calls GET /api/admin/verify which checks the DB directly.
+  // Never trusts client-side data — the server is the only source of truth.
+  useEffect(() => {
+    verifyAdmin().then(setIsAdmin);
+  }, []);
 
   // Listen for unread count changes to re-render conversation list badges
   useEffect(() => {
@@ -229,6 +246,20 @@ function MessengerView({ user, logout }) {
     }
   };
 
+  const handleReport = (msg) => {
+    // Look up the sender's username from participant info
+    const ids = (activeConversation?.participant_ids || '').split(',').filter(Boolean);
+    const names = (activeConversation?.participant_usernames || '').split(',').filter(Boolean);
+    const idx = ids.indexOf(msg.senderId);
+    const senderUsername = idx >= 0 && idx < names.length ? names[idx] : 'Unknown user';
+    setReportTarget({
+      userId: msg.senderId,
+      username: senderUsername,
+      conversationId: activeConversation?.id,
+      messageId: msg.id,
+    });
+  };
+
   // On mobile: show sidebar when no conversation selected, show chat when one is selected
   const showSidebar = !isMobile || !activeConversation;
   const showChat = !isMobile || !!activeConversation;
@@ -242,47 +273,56 @@ function MessengerView({ user, logout }) {
 
   return (
     <div style={appStyles.app}>
-      {showSidebar && (
-        <ConversationList
-          ref={conversationListRef}
-          activeConversationId={activeConversation?.id}
-          onSelect={handleSelectConversation}
-          onNewConversation={() => setShowNewModal(true)}
-          onLogout={logout}
-          currentUser={user}
-          isMobile={isMobile}
-          getUnreadCount={getUnreadCount}
-        />
-      )}
-      {showChat && (
-        <div style={appStyles.main}>
-          <ChatWindow
-            conversation={activeConversation}
-            messages={messages}
-            myUserId={user.id}
-            loading={msgLoading}
-            loadingMore={loadingMore}
-            hasMore={hasMore}
-            onLoadMore={loadMore}
-            onDeleteMessage={deleteMessage}
-            onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
-            onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
-            onForward={(msg) => setForwardingMsg(msg)}
-            onNewConversation={() => setShowNewModal(true)}
-            onBack={isMobile ? handleBack : null}
-          />
-          <MessageInput
-            onSend={handleSend}
-            onSendMedia={handleSendMedia}
-            onSaveEdit={handleSaveEdit}
-            disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
-            replyTo={replyTo}
-            editingMsg={editingMsg}
-            onCancelReply={() => setReplyTo(null)}
-            onCancelEdit={() => setEditingMsg(null)}
-            peerDeleted={!!activeConversation?.has_deleted_participant}
-          />
-        </div>
+      {showAdminPanel ? (
+        <AdminPanel onClose={() => setShowAdminPanel(false)} />
+      ) : (
+        <>
+          {showSidebar && (
+            <ConversationList
+              ref={conversationListRef}
+              activeConversationId={activeConversation?.id}
+              onSelect={handleSelectConversation}
+              onNewConversation={() => setShowNewModal(true)}
+              onLogout={logout}
+              currentUser={user}
+              isMobile={isMobile}
+              getUnreadCount={getUnreadCount}
+              isAdmin={isAdmin}
+              onOpenAdmin={() => setShowAdminPanel(true)}
+            />
+          )}
+          {showChat && (
+            <div style={appStyles.main}>
+              <ChatWindow
+                conversation={activeConversation}
+                messages={messages}
+                myUserId={user.id}
+                loading={msgLoading}
+                loadingMore={loadingMore}
+                hasMore={hasMore}
+                onLoadMore={loadMore}
+                onDeleteMessage={deleteMessage}
+                onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
+                onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
+                onForward={(msg) => setForwardingMsg(msg)}
+                onReport={handleReport}
+                onNewConversation={() => setShowNewModal(true)}
+                onBack={isMobile ? handleBack : null}
+              />
+              <MessageInput
+                onSend={handleSend}
+                onSendMedia={handleSendMedia}
+                onSaveEdit={handleSaveEdit}
+                disabled={!activeConversation || !!activeConversation?.has_deleted_participant}
+                replyTo={replyTo}
+                editingMsg={editingMsg}
+                onCancelReply={() => setReplyTo(null)}
+                onCancelEdit={() => setEditingMsg(null)}
+                peerDeleted={!!activeConversation?.has_deleted_participant}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {showNewModal && (
@@ -300,6 +340,16 @@ function MessengerView({ user, logout }) {
           currentConversationId={activeConversation?.id}
           onForward={handleForward}
           onClose={() => setForwardingMsg(null)}
+        />
+      )}
+
+      {reportTarget && (
+        <ReportModal
+          reportedUserId={reportTarget.userId}
+          reportedUsername={reportTarget.username}
+          conversationId={reportTarget.conversationId}
+          messageId={reportTarget.messageId}
+          onClose={() => setReportTarget(null)}
         />
       )}
     </div>
@@ -346,11 +396,21 @@ export default function App() {
     );
   }
 
+  if (view === 'terms') {
+    return <TermsOfService onBack={() => setView('register')} />;
+  }
+
+  if (view === 'privacy') {
+    return <PrivacyPolicy onBack={() => setView('register')} />;
+  }
+
   if (view === 'register') {
     return (
       <Register
         onRegister={register}
         onSwitchToLogin={() => setView('login')}
+        onShowTerms={() => setView('terms')}
+        onShowPrivacy={() => setView('privacy')}
       />
     );
   }

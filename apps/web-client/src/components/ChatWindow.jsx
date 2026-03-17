@@ -53,6 +53,7 @@ const s = {
     position: 'fixed', background: '#1e1e2e', border: '1px solid #333',
     borderRadius: '8px', padding: '0.25rem 0', zIndex: 200,
     boxShadow: '0 8px 24px rgba(0,0,0,0.6)', minWidth: '180px',
+    maxHeight: 'calc(100vh - 16px)', overflowY: 'auto',
   },
   menuItem: {
     padding: '0.5rem 1rem', color: '#e0e0e0', cursor: 'pointer',
@@ -252,7 +253,7 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
   return null;
 }
 
-export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onNewConversation, onBack }) {
+export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onReport, onNewConversation, onBack }) {
   const bottomRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y, msg }
@@ -337,9 +338,14 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
     const menuWidth = 180; // matches minWidth in s.menu
+    const menuHeight = 280; // conservative estimate for max menu items
     // Clamp so the menu doesn't overflow the right edge of the viewport
     const x = Math.min(rect.left, window.innerWidth - menuWidth - 8);
-    const y = rect.bottom + 4;
+    // If the menu would overflow the bottom, flip it upward
+    let y = rect.bottom + 4;
+    if (y + menuHeight > window.innerHeight) {
+      y = Math.max(8, rect.top - menuHeight - 4);
+    }
     setMenu({ x, y, msg });
   };
 
@@ -352,6 +358,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
     if (action === 'edit') onEditMessage?.(msg);
     if (action === 'reply') onReply?.(msg);
     if (action === 'forward') onForward?.(msg);
+    if (action === 'report') onReport?.(msg);
     if (action === 'download') {
       // For media messages, trigger a download of the media content
       const meta = parseMediaMeta(msg.plaintext);
@@ -467,8 +474,13 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 const touch = e.touches[0];
                 longPressTimer.current = setTimeout(() => {
                   const menuWidth = 180;
+                  const menuHeight = 280;
                   const x = Math.min(touch.clientX, window.innerWidth - menuWidth - 8);
-                  setMenu({ x, y: touch.clientY, msg });
+                  let y = touch.clientY;
+                  if (y + menuHeight > window.innerHeight) {
+                    y = Math.max(8, y - menuHeight);
+                  }
+                  setMenu({ x, y, msg });
                 }, 500);
               }}
               onTouchEnd={() => clearTimeout(longPressTimer.current)}
@@ -538,6 +550,14 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
               onMouseLeave={(e) => (e.target.style.background = 'transparent')}
               onClick={() => handleAction('download')}>
               ⬇ Download
+            </button>
+          )}
+          {menu.msg.senderId !== myUserId && (
+            <button style={s.menuItem}
+              onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
+              onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+              onClick={() => handleAction('report')}>
+              🚩 Report
             </button>
           )}
           <button style={s.menuItem}

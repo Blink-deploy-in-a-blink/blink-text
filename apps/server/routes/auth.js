@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
@@ -18,6 +19,51 @@ const authLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later' },
 });
 
+// ---------------------------------------------------------------------------
+// Proof of Work (PoW) — anti-spam for registration
+// ---------------------------------------------------------------------------
+// Difficulty: number of leading zero bits required in the SHA-256 hash.
+// 18 bits ≈ 1-3 seconds on a modern device, ~30 min for 1000 registrations.
+const POW_DIFFICULTY = 18;
+const POW_CHALLENGE_TTL_MS = 5 * 60 * 1000; // challenges expire after 5 minutes
+
+// In-memory store of issued challenges. Each challenge can be used exactly once.
+// Map<challengeString, { createdAt: number }>
+const powChallenges = new Map();
+
+// Clean up expired challenges every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of powChallenges) {
+    if (now - val.createdAt > POW_CHALLENGE_TTL_MS) powChallenges.delete(key);
+  }
+}, 60_000).unref();
+
+/**
+ * Verify that SHA-256(challenge + nonce) has at least `difficulty` leading zero bits.
+ */
+function verifyPoW(challenge, nonce, difficulty) {
+  const hash = crypto.createHash('sha256')
+    .update(challenge + String(nonce))
+    .digest();
+  const requiredFullBytes = Math.floor(difficulty / 8);
+  for (let i = 0; i < requiredFullBytes; i++) {
+    if (hash[i] !== 0) return false;
+  }
+  const remainingBits = difficulty % 8;
+  if (remainingBits > 0) {
+    if ((hash[requiredFullBytes] >> (8 - remainingBits)) !== 0) return false;
+  }
+  return true;
+}
+
+// GET /api/auth/pow-challenge — issue a fresh challenge for registration
+router.get('/pow-challenge', authLimiter, (_req, res) => {
+  const challenge = crypto.randomBytes(32).toString('hex');
+  powChallenges.set(challenge, { createdAt: Date.now() });
+  return res.json({ challenge, difficulty: POW_DIFFICULTY });
+});
+
 // POST /api/auth/register
 router.post(
   '/register',
@@ -33,6 +79,16 @@ router.post(
       .isString()
       .isLength({ min: 8 })
       .withMessage('Password must be at least 8 characters'),
+    body('powChallenge')
+      .isString()
+      .notEmpty()
+      .withMessage('Proof of work challenge is required'),
+    body('powNonce')
+      .notEmpty()
+      .withMessage('Proof of work solution is required'),
+    body('acceptedTerms')
+      .equals('true')
+      .withMessage('You must accept the Terms of Service and Privacy Policy'),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -40,7 +96,25 @@ router.post(
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { username, password } = req.body;
+    const { username, password, powChallenge, powNonce } = req.body;
+
+    // Verify PoW challenge exists and hasn't expired
+    const challengeEntry = powChallenges.get(powChallenge);
+    if (!challengeEntry) {
+      return res.status(400).json({ error: 'Invalid or expired proof-of-work challenge. Please try again.' });
+    }
+    if (Date.now() - challengeEntry.createdAt > POW_CHALLENGE_TTL_MS) {
+      powChallenges.delete(powChallenge);
+      return res.status(400).json({ error: 'Proof-of-work challenge expired. Please try again.' });
+    }
+
+    // Consume the challenge (one-time use)
+    powChallenges.delete(powChallenge);
+
+    // Verify the solution
+    if (!verifyPoW(powChallenge, powNonce, POW_DIFFICULTY)) {
+      return res.status(400).json({ error: 'Invalid proof-of-work solution.' });
+    }
 
     try {
       const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
@@ -51,9 +125,12 @@ router.post(
       const password_hash = await bcrypt.hash(password, 12);
       const id = uuidv4();
 
+      // Capture registration IP for law enforcement compliance
+      const registrationIp = req.ip || req.connection?.remoteAddress || null;
+
       db.prepare(
-        'INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)'
-      ).run(id, username, password_hash);
+        'INSERT INTO users (id, username, password_hash, registration_ip) VALUES (?, ?, ?, ?)'
+      ).run(id, username, password_hash, registrationIp);
 
       const token = signToken({ id, username });
       return res.status(201).json({ token, user: { id, username } });
@@ -88,6 +165,10 @@ router.post(
 
       if (user.deleted_at) {
         return res.status(401).json({ error: 'This account has been deleted' });
+      }
+
+      if (user.is_banned) {
+        return res.status(403).json({ error: 'This account has been suspended' });
       }
 
       const valid = await bcrypt.compare(password, user.password_hash);

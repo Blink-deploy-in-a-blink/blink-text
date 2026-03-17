@@ -15,6 +15,8 @@ if (!process.env.JWT_SECRET) {
 /**
  * Express middleware that verifies a Bearer JWT in the Authorization header.
  * Attaches the decoded payload to req.user on success.
+ * Also checks the database for banned/deleted accounts so bans take effect immediately,
+ * not just at token expiry.
  */
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -30,6 +32,21 @@ function authenticateToken(req, res, next) {
     if (err) {
       return res.status(403).json({ error: 'Invalid or expired token' });
     }
+
+    // Check ban/deletion status in the DB so bans are enforced immediately,
+    // even if the JWT hasn't expired yet.
+    const db = require('./db');
+    const dbUser = db.prepare('SELECT is_banned, deleted_at FROM users WHERE id = ?').get(user.id);
+    if (!dbUser) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    if (dbUser.is_banned) {
+      return res.status(403).json({ error: 'This account has been suspended' });
+    }
+    if (dbUser.deleted_at) {
+      return res.status(401).json({ error: 'This account has been deleted' });
+    }
+
     req.user = user;
     next();
   });

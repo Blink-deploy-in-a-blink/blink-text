@@ -31,7 +31,9 @@ api.interceptors.response.use(
       (error.response.status === 401 || error.response.status === 403) &&
       // Don't auto-logout on login/register failures
       !error.config.url?.includes('/api/auth/login') &&
-      !error.config.url?.includes('/api/auth/register')
+      !error.config.url?.includes('/api/auth/register') &&
+      // Don't auto-logout when admin verify returns 403 (normal for non-admins)
+      !(error.config.url?.includes('/api/admin/verify') && error.response.status === 403)
     ) {
       isLoggingOut = true;
       console.warn('[api] Token expired or invalid — clearing session');
@@ -48,8 +50,11 @@ api.interceptors.response.use(
   }
 );
 
-export const register = (username, password) =>
-  api.post('/api/auth/register', { username, password }).then((r) => r.data);
+export const getPowChallenge = () =>
+  api.get('/api/auth/pow-challenge').then((r) => r.data);
+
+export const register = (username, password, { powChallenge, powNonce, acceptedTerms } = {}) =>
+  api.post('/api/auth/register', { username, password, powChallenge, powNonce, acceptedTerms }).then((r) => r.data);
 
 export const login = (username, password) =>
   api.post('/api/auth/login', { username, password }).then((r) => r.data);
@@ -99,6 +104,56 @@ export const deleteAccount = (password, deleteConversations = false) =>
 
 export const refreshToken = () =>
   api.post('/api/auth/refresh').then((r) => r.data);
+
+export const submitReport = (reportedUserId, reason, { conversationId, messageId, details } = {}) =>
+  api.post('/api/reports', { reportedUserId, reason, conversationId, messageId, details }).then((r) => r.data);
+
+// Admin API — all these endpoints are protected server-side by requireAdmin middleware.
+// The client discovers admin status ONLY via verifyAdmin(), which hits the DB on every call.
+// Admin status is NEVER sent in auth responses or stored in localStorage.
+
+/**
+ * Check if the current user is an admin. Hits the server DB directly.
+ * Returns true if admin, false if not (403 response = not admin).
+ * This is the ONLY source of truth for admin status on the client.
+ */
+export const verifyAdmin = async () => {
+  try {
+    await api.get('/api/admin/verify');
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const getAdminStats = () =>
+  api.get('/api/admin/stats').then((r) => r.data);
+
+export const getAdminReports = ({ status, page, limit } = {}) => {
+  const params = {};
+  if (status) params.status = status;
+  if (page) params.page = page;
+  if (limit) params.limit = limit;
+  return api.get('/api/admin/reports', { params }).then((r) => r.data);
+};
+
+export const updateReport = (reportId, status) =>
+  api.put(`/api/admin/reports/${reportId}`, { status }).then((r) => r.data);
+
+export const getAdminUsers = ({ search, filter, page, limit } = {}) => {
+  const params = {};
+  if (search) params.search = search;
+  if (filter) params.filter = filter;
+  if (page) params.page = page;
+  if (limit) params.limit = limit;
+  return api.get('/api/admin/users', { params }).then((r) => r.data);
+};
+
+export const banUser = (userId) =>
+  api.post(`/api/admin/ban/${userId}`).then((r) => r.data);
+
+export const unbanUser = (userId) =>
+  api.post(`/api/admin/unban/${userId}`).then((r) => r.data);
 
 /**
  * Upload encrypted media binary to the server.
