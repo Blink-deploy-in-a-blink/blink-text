@@ -851,18 +851,19 @@ We use **SQLite** via `better-sqlite3` with WAL mode. No Docker in development -
 
 These are not optional. Launching publicly without these = getting shut down, flooded by bots, or facing legal liability.
 
-| # | Feature | Time | Why It's Mandatory | Category |
-|---|---------|------|--------------------|----------|
-| P1 | **Terms of Service + Privacy Policy** | 4 hrs | No legal shield = personal liability. DSA/Online Safety Act require it. You can be sued on day 1 without this. | Legal |
-| P2 | **WebSocket rate limiting** | 2 hrs | Anyone can flood every conversation right now. One script = platform down. | Security |
-| P3 | **Proof of Work on registration** | 8 hrs | Without it, 10,000 bot accounts in an hour. Your DB fills up, real users get spammed. | Anti-spam |
-| P4 | **Report button + admin queue** | 8 hrs | EU (DSA), UK (Online Safety Act), India (IT Rules) all REQUIRE a user-facing report mechanism. | Legal |
-| P5 | **Admin dashboard (ban/review)** | 10 hrs | If someone reports illegal content and you can't act on it, you lose safe harbor protection. | Legal |
-| P6 | **Registration IP logging** | 2 hrs | When (not if) law enforcement asks "who registered this account?", you need an answer. Log IP on registration only. | Legal |
-| P7 | **NCMEC ESP registration** | 2 hrs | US federal law. If you host in the US and gain knowledge of CSAM, you MUST be registered to report it. Paperwork, not code. | Legal |
-| | | **~36 hrs total** | | |
+| # | Feature | Time | Status | Why It's Mandatory | Category |
+|---|---------|------|--------|---------------------|----------|
+| P1 | **Terms of Service + Privacy Policy** | 4 hrs | ✅ Done | No legal shield = personal liability. DSA/Online Safety Act require it. | Legal |
+| P2 | **WebSocket rate limiting** | 2 hrs | ✅ Done | Anyone can flood every conversation right now. One script = platform down. | Security |
+| P3 | **Proof of Work on registration** | 8 hrs | ✅ Done | Without it, 10,000 bot accounts in an hour. Your DB fills up, real users get spammed. | Anti-spam |
+| P4 | **Report button + admin queue** | 8 hrs | ✅ Done | EU (DSA), UK (Online Safety Act), India (IT Rules) all REQUIRE a user-facing report mechanism. | Legal |
+| P5 | **Admin dashboard (ban/review)** | 10 hrs | ✅ Done | If someone reports illegal content and you can't act on it, you lose safe harbor protection. | Legal |
+| P6 | **Registration IP logging** | 2 hrs | ✅ Done | When (not if) law enforcement asks "who registered this account?", you need an answer. Log IP on registration only. | Legal |
+| P7 | **NCMEC ESP registration** | 2 hrs | 🔲 Pending | US federal law. If you host in the US and gain knowledge of CSAM, you MUST be registered to report it. Paperwork, not code. | Legal |
+| P8 | **Group invite links** | 6 hrs | 🔲 Pending | Users need a way to share group chats via link. Without this, groups are unusable for real-world use. | UX |
+| | | **~42 hrs total** | **6/8 done** | | |
 
-**Do NOT launch publicly until all P1-P7 are done.**
+**P1–P6 are complete.** Remaining: P7 (paperwork, not code) and P8 (group invite links).
 
 ---
 
@@ -914,32 +915,33 @@ Only build these when you have paying users and actual demand. Each one is a big
 
 ### Complete Ranked List (All Features, Final Order)
 
-| Rank | Feature | Time | Phase | Category |
-|------|---------|------|-------|----------|
-| 1 | Terms of Service + Privacy Policy | 4 hrs | Pre-Launch | Legal |
-| 2 | WebSocket rate limiting | 2 hrs | Pre-Launch | Security |
-| 3 | Proof of Work on registration | 8 hrs | Pre-Launch | Anti-spam |
-| 4 | Report button + admin queue | 8 hrs | Pre-Launch | Legal |
-| 5 | Admin dashboard (ban/review) | 10 hrs | Pre-Launch | Legal |
-| 6 | Registration IP logging | 2 hrs | Pre-Launch | Legal |
-| 7 | NCMEC ESP registration | 2 hrs | Pre-Launch | Legal |
-| 8 | Disappearing messages | 12 hrs | Revenue | Feature |
-| 9 | Burner rooms (no-account) | 18 hrs | Revenue | Feature |
-| 10 | Paid storage + Stripe | 15 hrs | Revenue | Monetization |
-| 11 | Relay-only mode | 5 hrs | Revenue | Feature |
-| 12 | Screenshot detection | 6 hrs | Revenue | Feature |
-| 13 | Reputation/trust levels | 6 hrs | Revenue | Anti-spam |
-| 14 | Read receipts | 5 hrs | Engagement | Polish |
-| 15 | Typing indicators | 3 hrs | Engagement | Polish |
-| 16 | Message reactions | 6 hrs | Engagement | Polish |
-| 17 | hCaptcha on registration | 4 hrs | Engagement | Anti-spam |
-| 18 | Message search | 8 hrs | Engagement | Feature |
-| 19 | PWA + Push notifications | 10 hrs | Engagement | Feature |
-| 20 | PostgreSQL migration | 10 hrs | Infra | Scaling |
-| 21 | Large file uploads (10 GB) | 25 hrs | Infra | Feature |
-| 22 | Group E2E encryption | 50 hrs | Infra | Feature |
-| 23 | WebRTC calling | 80 hrs | Infra | Feature |
-| | **TOTAL** | **~299 hrs** | | |
+| Rank | Feature | Time | Phase | Status |
+|------|---------|------|-------|--------|
+| 1 | Terms of Service + Privacy Policy | 4 hrs | Pre-Launch | ✅ Done |
+| 2 | WebSocket rate limiting | 2 hrs | Pre-Launch | ✅ Done |
+| 3 | Proof of Work on registration | 8 hrs | Pre-Launch | ✅ Done |
+| 4 | Report button + admin queue | 8 hrs | Pre-Launch | ✅ Done |
+| 5 | Admin dashboard (ban/review) | 10 hrs | Pre-Launch | ✅ Done |
+| 6 | Registration IP logging | 2 hrs | Pre-Launch | ✅ Done |
+| 7 | NCMEC ESP registration | 2 hrs | Pre-Launch | 🔲 Pending (paperwork) |
+| 8 | Group invite links | 6 hrs | Pre-Launch | 🔲 Pending |
+| 9 | Disappearing messages | 12 hrs | Revenue | 🔲 Pending |
+| 10 | Burner rooms (no-account) | 18 hrs | Revenue | 🔲 Pending |
+| 11 | Paid storage + Stripe | 15 hrs | Revenue | 🔲 Pending |
+| 12 | Relay-only mode | 5 hrs | Revenue | 🔲 Pending |
+| 13 | Screenshot detection | 6 hrs | Revenue | 🔲 Pending |
+| 14 | Reputation/trust levels | 6 hrs | Revenue | 🔲 Pending |
+| 15 | Read receipts | 5 hrs | Engagement | 🔲 Pending |
+| 16 | Typing indicators | 3 hrs | Engagement | 🔲 Pending |
+| 17 | Message reactions | 6 hrs | Engagement | 🔲 Pending |
+| 18 | hCaptcha on registration | 4 hrs | Engagement | 🔲 Pending |
+| 19 | Message search | 8 hrs | Engagement | 🔲 Pending |
+| 20 | PWA + Push notifications | 10 hrs | Engagement | 🔲 Pending |
+| 21 | PostgreSQL migration | 10 hrs | Infra | 🔲 Pending |
+| 22 | Large file uploads (10 GB) | 25 hrs | Infra | 🔲 Pending |
+| 23 | Group E2E encryption | 50 hrs | Infra | 🔲 Pending |
+| 24 | WebRTC calling | 80 hrs | Infra | 🔲 Pending |
+| | **TOTAL** | **~305 hrs** | | **6/24 done** |
 
 ---
 
@@ -948,15 +950,19 @@ Only build these when you have paying users and actual demand. Each one is a big
 ```
   PHASE 1: PRE-LAUNCH (do all before going public)
   ================================================
-  P1 ToS ----+
-  P2 WS Rate-+---> P3 PoW ---> P4 Report ---> P5 Admin Dashboard
-  P6 IP Log--+                                       |
-  P7 NCMEC --+                                       |
-                                                      |
-  PHASE 2: REVENUE (build premium tier)               |
-  =============================================       |
-  R1 Disappearing msgs  <----------------------------+
-  R2 Burner rooms       <----------------------------+
+  P1 ToS --------- ✅ DONE
+  P2 WS Rate ------ ✅ DONE
+  P3 PoW ---------- ✅ DONE
+  P4 Report ------- ✅ DONE
+  P5 Admin -------- ✅ DONE
+  P6 IP Log ------- ✅ DONE
+  P7 NCMEC -------- 🔲 (paperwork, not code)
+  P8 Invite Links - 🔲 (group invite links)
+                         |
+  PHASE 2: REVENUE       |
+  ====================   |
+  R1 Disappearing  <-----+
+  R2 Burner rooms  <-----+
        |        |
        v        v
   R3 Stripe (paid tiers)
@@ -984,27 +990,32 @@ Only build these when you have paying users and actual demand. Each one is a big
 
 ---
 
-### Signal vs Blink -- Feature Comparison (Post-Roadmap)
+### Signal vs Blink -- Feature Comparison (Current + Roadmap)
 
-| Feature | Signal | Blink (after roadmap) |
-|---------|--------|-----------------------|
-| E2E Encryption | Double Ratchet | ECDH + HKDF chain ratchet |
-| No phone number required | No | **Yes** |
-| No registration option (burner rooms) | No | **Yes** |
-| Self-hostable (easy) | No | **Yes** |
-| Web-only (no install) | No | **Yes** |
-| Original quality media | No | **Yes** |
-| Disappearing messages | Yes | Yes |
-| Relay-only mode | No | **Yes** |
-| Screenshot alerts | No | **Yes** |
-| Read receipts | Yes | Yes |
-| Typing indicators | Yes | Yes |
-| Reactions | Yes | Yes |
-| Anti-spam (no PII required) | Phone # = spam gate | PoW + reputation |
-| Voice/Video calls | Yes | Planned |
-| Group encryption | Yes | Planned |
-| Mobile app (native) | Yes | No (PWA only) |
-| Security audit | Yes | No |
-| User base | 40M+ | TBD |
+| Feature | Signal | Blink (current) | Blink (after roadmap) |
+|---------|--------|-----------------|----------------------|
+| E2E Encryption | Double Ratchet | ✅ ECDH + HKDF chain ratchet | Same |
+| No phone number required | No | ✅ **Yes** | **Yes** |
+| Message editing | No | ✅ **Yes** | **Yes** |
+| Message forwarding | Yes | ✅ **Yes** | **Yes** |
+| Media sharing (encrypted) | Yes | ✅ **Yes** | **Yes** |
+| Admin dashboard | No | ✅ **Yes** | **Yes** |
+| User reporting | Yes | ✅ **Yes** | **Yes** |
+| Anti-spam (no PII required) | Phone # = spam gate | ✅ PoW | PoW + reputation |
+| Self-hostable (easy) | No | ✅ **Yes** | **Yes** |
+| Web-only (no install) | No | ✅ **Yes** | **Yes** |
+| Original quality media | No | ✅ **Yes** | **Yes** |
+| No registration option (burner rooms) | No | ❌ | **Yes** |
+| Disappearing messages | Yes | ❌ | Yes |
+| Relay-only mode | No | ❌ | **Yes** |
+| Screenshot alerts | No | ❌ | **Yes** |
+| Read receipts | Yes | ❌ | Yes |
+| Typing indicators | Yes | ❌ | Yes |
+| Reactions | Yes | ❌ | Yes |
+| Voice/Video calls | Yes | ❌ | Planned |
+| Group encryption | Yes | ❌ | Planned |
+| Mobile app (native) | Yes | ❌ | No (PWA only) |
+| Security audit | Yes | ❌ | No |
+| User base | 40M+ | - | TBD |
 
 **TL;DR: We don't beat Signal at security. We beat them at anonymity, accessibility, and self-sovereignty -- and we have a business model.**
