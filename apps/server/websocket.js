@@ -20,9 +20,18 @@ const WS_RATE_LIMIT_MAX = 30;           // max 30 messages per window
 /**
  * Simple in-memory rate limiter for WebSocket events.
  * Returns true if the event should be allowed, false if rate-limited.
+ * Periodically cleans up expired buckets to avoid unbounded memory growth.
  */
 function createWsRateLimiter() {
   const buckets = new Map(); // userId -> { count, resetAt }
+  // Clean up expired buckets every 60 seconds
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, bucket] of buckets) {
+      if (now >= bucket.resetAt) buckets.delete(key);
+    }
+  }, 60_000);
+  cleanupInterval.unref(); // don't keep the process alive for cleanup
 
   return function isAllowed(userId) {
     const now = Date.now();

@@ -112,9 +112,16 @@ router.post('/ban/:userId', authenticateToken, requireAdmin, (req, res) => {
     // Disconnect the banned user's active sockets
     const io = req.app.get('io');
     if (io) {
-      const sockets = io.sockets.sockets;
-      for (const [, s] of sockets) {
+      // Collect matching socket IDs first, then disconnect in a second pass
+      const toDisconnect = [];
+      for (const [socketId, s] of io.sockets.sockets) {
         if (s.user && s.user.id === userId) {
+          toDisconnect.push(socketId);
+        }
+      }
+      for (const socketId of toDisconnect) {
+        const s = io.sockets.sockets.get(socketId);
+        if (s) {
           s.emit('banned', { message: 'Your account has been suspended' });
           s.disconnect(true);
         }

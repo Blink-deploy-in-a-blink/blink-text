@@ -233,10 +233,10 @@ function MessengerView({ user, logout }) {
 
   const handleReport = (msg) => {
     // Look up the sender's username from participant info
-    const ids = (activeConversation?.participant_ids || '').split(',');
-    const names = (activeConversation?.participant_usernames || '').split(',');
+    const ids = (activeConversation?.participant_ids || '').split(',').filter(Boolean);
+    const names = (activeConversation?.participant_usernames || '').split(',').filter(Boolean);
     const idx = ids.indexOf(msg.senderId);
-    const senderUsername = idx >= 0 ? names[idx] : 'Unknown user';
+    const senderUsername = idx >= 0 && idx < names.length ? names[idx] : 'Unknown user';
     setReportTarget({
       userId: msg.senderId,
       username: senderUsername,
