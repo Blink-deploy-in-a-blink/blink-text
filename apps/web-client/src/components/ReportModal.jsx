@@ -92,7 +92,13 @@ export default function ReportModal({ reportedUserId, reportedUsername, conversa
       });
       setSubmitted(true);
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Failed to submit report');
+      // Server may return { error: "..." } or { errors: [...] } (express-validator)
+      const validationErrors = err.response?.data?.errors;
+      let errorMsg = '';
+      if (Array.isArray(validationErrors) && validationErrors.length > 0) {
+        errorMsg = validationErrors.map((e) => (typeof e === 'string' ? e : e.msg || e.message || '')).filter(Boolean).join('. ');
+      }
+      setError(errorMsg || err.response?.data?.error || err.message || 'Failed to submit report');
     } finally {
       setLoading(false);
     }

@@ -50,6 +50,26 @@ router.post(
       }
     }
 
+    // If messageId provided, verify it exists, belongs to the conversation,
+    // and was authored by the reported user
+    if (messageId) {
+      if (!conversationId) {
+        return res.status(400).json({ error: 'conversationId is required when reporting a message' });
+      }
+      const message = db.prepare(
+        'SELECT id, conversation_id, sender_id FROM messages WHERE id = ?'
+      ).get(messageId);
+      if (!message) {
+        return res.status(404).json({ error: 'Message not found' });
+      }
+      if (message.conversation_id !== conversationId) {
+        return res.status(400).json({ error: 'Message does not belong to the specified conversation' });
+      }
+      if (message.sender_id !== reportedUserId) {
+        return res.status(400).json({ error: 'Reported user is not the author of the specified message' });
+      }
+    }
+
     try {
       const id = uuidv4();
       db.prepare(

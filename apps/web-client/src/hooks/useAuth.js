@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
-import { login as apiLogin, register as apiRegister, refreshToken as apiRefreshToken } from '../services/api.js';
+import { login as apiLogin, register as apiRegister, refreshToken as apiRefreshToken, getPowChallenge } from '../services/api.js';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { initializeIdentity, clearAllCryptoKeys, isIdentityReady } from '../services/cryptoService.js';
+import { solvePoW } from '../services/powService.js';
 
 /**
  * Auth state hook.
@@ -132,14 +133,30 @@ export function useAuth() {
   );
 
   const register = useCallback(
-    async (username, password) => {
+    async (username, password, { acceptedTerms, onPoWStatus } = {}) => {
       setLoading(true);
       setError(null);
       try {
-        const data = await apiRegister(username, password);
+        // 1. Fetch a PoW challenge from the server
+        onPoWStatus?.('Requesting challenge…');
+        const { challenge, difficulty } = await getPowChallenge();
+
+        // 2. Solve the PoW puzzle in a Web Worker (non-blocking)
+        onPoWStatus?.('Securing your account…');
+        const { nonce } = await solvePoW(challenge, difficulty, (iterations) => {
+          onPoWStatus?.(`Securing your account… (${Math.round(iterations / 1000)}k hashes)`);
+        });
+
+        // 3. Register with the solution
+        onPoWStatus?.('Creating account…');
+        const data = await apiRegister(username, password, {
+          powChallenge: challenge,
+          powNonce: nonce,
+          acceptedTerms,
+        });
         await _postLogin(data);
       } catch (err) {
-        const msg = err.response?.data?.error || err.response?.data?.errors?.[0]?.msg || 'Registration failed';
+        const msg = err.response?.data?.error || err.response?.data?.errors?.[0]?.msg || err.message || 'Registration failed';
         setError(msg);
         throw new Error(msg);
       } finally {

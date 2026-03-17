@@ -380,6 +380,7 @@ function UsersTab({ onStatsChange }) {
                   <th style={s.th}>Username</th>
                   <th style={s.th}>Status</th>
                   <th style={s.th}>Reports</th>
+                  <th style={s.th}>IP</th>
                   <th style={s.th}>Registered</th>
                   <th style={s.th}>Actions</th>
                 </tr>
@@ -408,6 +409,9 @@ function UsersTab({ onStatsChange }) {
                       ) : (
                         <span style={{ color: '#444' }}>0</span>
                       )}
+                    </td>
+                    <td style={{ ...s.td, color: '#666', fontSize: '0.75rem', fontFamily: 'monospace' }}>
+                      {u.registration_ip || '—'}
                     </td>
                     <td style={{ ...s.td, color: '#666', fontSize: '0.8rem' }}>
                       {formatDate(u.created_at)}

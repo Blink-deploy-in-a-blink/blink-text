@@ -33,7 +33,7 @@ api.interceptors.response.use(
       !error.config.url?.includes('/api/auth/login') &&
       !error.config.url?.includes('/api/auth/register') &&
       // Don't auto-logout when admin verify returns 403 (normal for non-admins)
-      !error.config.url?.includes('/api/admin/')
+      !(error.config.url?.includes('/api/admin/verify') && error.response.status === 403)
     ) {
       isLoggingOut = true;
       console.warn('[api] Token expired or invalid — clearing session');
@@ -50,8 +50,11 @@ api.interceptors.response.use(
   }
 );
 
-export const register = (username, password) =>
-  api.post('/api/auth/register', { username, password }).then((r) => r.data);
+export const getPowChallenge = () =>
+  api.get('/api/auth/pow-challenge').then((r) => r.data);
+
+export const register = (username, password, { powChallenge, powNonce, acceptedTerms } = {}) =>
+  api.post('/api/auth/register', { username, password, powChallenge, powNonce, acceptedTerms }).then((r) => r.data);
 
 export const login = (username, password) =>
   api.post('/api/auth/login', { username, password }).then((r) => r.data);

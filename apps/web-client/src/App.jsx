@@ -17,6 +17,8 @@ import NewConversationModal from './components/NewConversationModal.jsx';
 import ForwardModal from './components/ForwardModal.jsx';
 import ReportModal from './components/ReportModal.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
+import TermsOfService from './components/TermsOfService.jsx';
+import PrivacyPolicy from './components/PrivacyPolicy.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: '#0f0f0f' },
@@ -394,11 +396,21 @@ export default function App() {
     );
   }
 
+  if (view === 'terms') {
+    return <TermsOfService onBack={() => setView('register')} />;
+  }
+
+  if (view === 'privacy') {
+    return <PrivacyPolicy onBack={() => setView('register')} />;
+  }
+
   if (view === 'register') {
     return (
       <Register
         onRegister={register}
         onSwitchToLogin={() => setView('login')}
+        onShowTerms={() => setView('terms')}
+        onShowPrivacy={() => setView('privacy')}
       />
     );
   }

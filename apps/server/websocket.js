@@ -57,6 +57,14 @@ function registerSocketHandlers(io) {
     if (!token) return next(new Error('Authentication token required'));
     jwt.verify(token, JWT_SECRET, (err, user) => {
       if (err) return next(new Error('Invalid or expired token'));
+
+      // Check ban/deletion status in DB so bans take effect immediately,
+      // even if the JWT hasn't expired yet.
+      const dbUser = db.prepare('SELECT is_banned, deleted_at FROM users WHERE id = ?').get(user.id);
+      if (!dbUser) return next(new Error('User not found'));
+      if (dbUser.is_banned) return next(new Error('Account suspended'));
+      if (dbUser.deleted_at) return next(new Error('Account deleted'));
+
       socket.user = user;
       next();
     });
@@ -171,8 +179,17 @@ function registerSocketHandlers(io) {
       }
     });
 
-    socket.on('key_exchange', (payload) => {
-      if (!wsRateCheck(userId)) return; // silently drop if rate-limited
+    socket.on('key_exchange', (payload, ack) => {
+      if (!wsRateCheck(userId)) {
+        // Key exchange is critical for conversation setup — notify the sender
+        // so the client can back off and retry instead of getting stuck.
+        if (typeof ack === 'function') {
+          ack({ error: 'Rate limit exceeded. Please slow down.' });
+        } else {
+          socket.emit('error', { message: 'Rate limit exceeded for key_exchange' });
+        }
+        return;
+      }
 
       const normalized = { ...payload, userId };
       const { valid } = validateKeyExchange(normalized);
