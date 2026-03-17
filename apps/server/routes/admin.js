@@ -53,29 +53,37 @@ router.get('/users', authenticateToken, requireAdmin, (req, res) => {
     const search = req.query.search?.trim();
     const filter = req.query.filter; // 'banned', 'active', 'all'
 
-    let query = 'SELECT id, username, is_admin, is_banned, registration_ip, created_at, deleted_at FROM users';
+    let query = `
+      SELECT u.id, u.username, u.is_admin, u.is_banned, u.registration_ip, u.created_at, u.deleted_at,
+        COALESCE(rc.report_count, 0) AS report_count
+      FROM users u
+      LEFT JOIN (
+        SELECT reported_user_id, COUNT(*) AS report_count FROM reports GROUP BY reported_user_id
+      ) rc ON rc.reported_user_id = u.id
+    `;
     let countQuery = 'SELECT COUNT(*) as total FROM users';
     const conditions = [];
     const params = [];
 
     if (search) {
-      conditions.push('username LIKE ?');
+      conditions.push('u.username LIKE ?');
       params.push(`%${search}%`);
     }
 
     if (filter === 'banned') {
-      conditions.push('is_banned = 1');
+      conditions.push('u.is_banned = 1');
     } else if (filter === 'active') {
-      conditions.push('is_banned = 0 AND deleted_at IS NULL');
+      conditions.push('u.is_banned = 0 AND u.deleted_at IS NULL');
     }
 
     if (conditions.length > 0) {
       const whereClause = ' WHERE ' + conditions.join(' AND ');
       query += whereClause;
-      countQuery += whereClause;
+      // Count query uses users table directly (no alias needed)
+      countQuery += ' WHERE ' + conditions.join(' AND ').replace(/u\./g, '');
     }
 
-    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    query += ' ORDER BY u.created_at DESC LIMIT ? OFFSET ?';
 
     const countParams = [...params];
     params.push(limit, offset);
@@ -83,18 +91,11 @@ router.get('/users', authenticateToken, requireAdmin, (req, res) => {
     const users = db.prepare(query).all(...params);
     const { total } = db.prepare(countQuery).get(...countParams);
 
-    // Get report counts per user
-    const reportCounts = {};
-    for (const u of users) {
-      const result = db.prepare('SELECT COUNT(*) as count FROM reports WHERE reported_user_id = ?').get(u.id);
-      reportCounts[u.id] = result.count;
-    }
-
     const usersWithReports = users.map(u => ({
       ...u,
       is_admin: !!u.is_admin,
       is_banned: !!u.is_banned,
-      report_count: reportCounts[u.id] || 0,
+      report_count: u.report_count,
     }));
 
     return res.json({ users: usersWithReports, total, page, limit });
