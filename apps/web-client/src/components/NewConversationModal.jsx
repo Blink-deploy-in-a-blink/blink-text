@@ -113,7 +113,7 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
         <label style={s.label}>Type</label>
         <select style={s.select} value={type} onChange={(e) => setType(e.target.value)}>
           <option value="direct_message">Direct</option>
-          <option value="group_chat">Group</option>
+          <option value="group_chat" disabled>Group (coming soon)</option>
         </select>
 
         {type === 'group_chat' && (

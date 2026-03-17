@@ -54,12 +54,14 @@ Alice types a message
 
 ### Core Messaging
 - **End-to-end encrypted messaging** — AES-256-GCM, ECDH P-256 key exchange, HKDF-SHA-256 key derivation
-- **Direct messages & group chats** — create conversations with one or multiple users
+- **Direct messages** — encrypted 1-on-1 conversations
 - **Real-time delivery** — Socket.io WebSocket transport with instant message relay
 - **Message editing** — edit sent messages (re-encrypted, relayed to all participants)
 - **Message deletion** — delete for yourself or delete for everyone
 - **Message forwarding** — forward text or media messages to other conversations
 - **Reply-to / quoting** — reply to specific messages with inline context
+
+> **Note:** Group chats are not yet supported. The current crypto (ECDH P-256) only supports 2-party key exchange. Group E2E encryption is on the [roadmap](PLAN.md).
 
 ### Media
 - **Encrypted media sharing** — send images and files, encrypted client-side before upload

@@ -860,10 +860,11 @@ These are not optional. Launching publicly without these = getting shut down, fl
 | P5 | **Admin dashboard (ban/review)** | 10 hrs | ✅ Done | If someone reports illegal content and you can't act on it, you lose safe harbor protection. | Legal |
 | P6 | **Registration IP logging** | 2 hrs | ✅ Done | When (not if) law enforcement asks "who registered this account?", you need an answer. Log IP on registration only. | Legal |
 | P7 | **NCMEC ESP registration** | 2 hrs | 🔲 Pending | US federal law. If you host in the US and gain knowledge of CSAM, you MUST be registered to report it. Paperwork, not code. | Legal |
-| P8 | **Group invite links** | 6 hrs | 🔲 Pending | Users need a way to share group chats via link. Without this, groups are unusable for real-world use. | UX |
-| | | **~42 hrs total** | **6/8 done** | | |
+| | | **~36 hrs total** | **6/7 done** | | |
 
-**P1–P6 are complete.** Remaining: P7 (paperwork, not code) and P8 (group invite links).
+**P1–P6 are complete.** Only P7 remains (paperwork, not code).
+
+> **Note on group chats:** Group conversations exist in the DB but are **not functional** — the current crypto (ECDH P-256) only supports 2-party key exchange. Group E2E encryption (~50 hrs) and group invite links must be built together in Phase 4 (I3). Do not expose group chat creation in the UI until then.
 
 ---
 
@@ -907,7 +908,7 @@ Only build these when you have paying users and actual demand. Each one is a big
 |---|---------|------|---------------|-------|
 | I1 | **PostgreSQL migration** | 10 hrs | When you hit ~500 concurrent users or deploy to cloud | SQLite is fine until then |
 | I2 | **Large file uploads (10 GB)** | 25 hrs | When paid storage tier exists and users request it | Needs chunked encryption (AES-GCM 2GB limit) |
-| I3 | **Group E2E encryption** | 50 hrs | When group chat is actually requested by users | Current groups are broken (ECDH = 2-party only) |
+| I3 | **Group E2E encryption + invite links** | 55 hrs | When group chat is actually requested by users | Current groups are broken (ECDH = 2-party only). Invite links bundled here since they require working group crypto. |
 | I4 | **WebRTC voice/video** | 80 hrs | Last priority -- commoditized, high effort | Needs TURN server ($50/mo) |
 | | | **~165 hrs total** | | |
 
@@ -924,24 +925,23 @@ Only build these when you have paying users and actual demand. Each one is a big
 | 5 | Admin dashboard (ban/review) | 10 hrs | Pre-Launch | ✅ Done |
 | 6 | Registration IP logging | 2 hrs | Pre-Launch | ✅ Done |
 | 7 | NCMEC ESP registration | 2 hrs | Pre-Launch | 🔲 Pending (paperwork) |
-| 8 | Group invite links | 6 hrs | Pre-Launch | 🔲 Pending |
-| 9 | Disappearing messages | 12 hrs | Revenue | 🔲 Pending |
-| 10 | Burner rooms (no-account) | 18 hrs | Revenue | 🔲 Pending |
-| 11 | Paid storage + Stripe | 15 hrs | Revenue | 🔲 Pending |
-| 12 | Relay-only mode | 5 hrs | Revenue | 🔲 Pending |
-| 13 | Screenshot detection | 6 hrs | Revenue | 🔲 Pending |
-| 14 | Reputation/trust levels | 6 hrs | Revenue | 🔲 Pending |
-| 15 | Read receipts | 5 hrs | Engagement | 🔲 Pending |
-| 16 | Typing indicators | 3 hrs | Engagement | 🔲 Pending |
-| 17 | Message reactions | 6 hrs | Engagement | 🔲 Pending |
-| 18 | hCaptcha on registration | 4 hrs | Engagement | 🔲 Pending |
-| 19 | Message search | 8 hrs | Engagement | 🔲 Pending |
-| 20 | PWA + Push notifications | 10 hrs | Engagement | 🔲 Pending |
-| 21 | PostgreSQL migration | 10 hrs | Infra | 🔲 Pending |
-| 22 | Large file uploads (10 GB) | 25 hrs | Infra | 🔲 Pending |
-| 23 | Group E2E encryption | 50 hrs | Infra | 🔲 Pending |
-| 24 | WebRTC calling | 80 hrs | Infra | 🔲 Pending |
-| | **TOTAL** | **~305 hrs** | | **6/24 done** |
+| 8 | Disappearing messages | 12 hrs | Revenue | 🔲 Pending |
+| 9 | Burner rooms (no-account) | 18 hrs | Revenue | 🔲 Pending |
+| 10 | Paid storage + Stripe | 15 hrs | Revenue | 🔲 Pending |
+| 11 | Relay-only mode | 5 hrs | Revenue | 🔲 Pending |
+| 12 | Screenshot detection | 6 hrs | Revenue | 🔲 Pending |
+| 13 | Reputation/trust levels | 6 hrs | Revenue | 🔲 Pending |
+| 14 | Read receipts | 5 hrs | Engagement | 🔲 Pending |
+| 15 | Typing indicators | 3 hrs | Engagement | 🔲 Pending |
+| 16 | Message reactions | 6 hrs | Engagement | 🔲 Pending |
+| 17 | hCaptcha on registration | 4 hrs | Engagement | 🔲 Pending |
+| 18 | Message search | 8 hrs | Engagement | 🔲 Pending |
+| 19 | PWA + Push notifications | 10 hrs | Engagement | 🔲 Pending |
+| 20 | PostgreSQL migration | 10 hrs | Infra | 🔲 Pending |
+| 21 | Large file uploads (10 GB) | 25 hrs | Infra | 🔲 Pending |
+| 22 | Group E2E + invite links | 55 hrs | Infra | 🔲 Pending |
+| 23 | WebRTC calling | 80 hrs | Infra | 🔲 Pending |
+| | **TOTAL** | **~299 hrs** | | **6/23 done** |
 
 ---
 
@@ -957,7 +957,6 @@ Only build these when you have paying users and actual demand. Each one is a big
   P5 Admin -------- ✅ DONE
   P6 IP Log ------- ✅ DONE
   P7 NCMEC -------- 🔲 (paperwork, not code)
-  P8 Invite Links - 🔲 (group invite links)
                          |
   PHASE 2: REVENUE       |
   ====================   |
@@ -984,7 +983,7 @@ Only build these when you have paying users and actual demand. Each one is a big
   ==================================
   I1 PostgreSQL migration  (when >500 concurrent users)
   I2 Large uploads         (after R3 Stripe exists)
-  I3 Group E2E             (after user demand)
+  I3 Group E2E + invite links (after user demand)
   I4 WebRTC                (last -- highest effort, lowest ROI)
 ```
 
