@@ -902,15 +902,19 @@ These don't directly make money, but without them the product feels "unfinished"
 
 ### PHASE 4: Infrastructure (Scale & advanced features)
 
-Only build these when you have paying users and actual demand. Each one is a big investment.
+Build these incrementally as your user base and revenue grow. Dockerfile is low-risk and can be done anytime. S3 and Postgres unlock the next tier of scale.
 
 | # | Feature | Time | When To Build | Notes |
 |---|---------|------|---------------|-------|
-| I1 | **PostgreSQL migration** | 10 hrs | When you hit ~500 concurrent users or deploy to cloud | SQLite is fine until then |
-| I2 | **Large file uploads (10 GB)** | 25 hrs | When paid storage tier exists and users request it | Needs chunked encryption (AES-GCM 2GB limit) |
-| I3 | **Group E2E encryption + invite links** | 55 hrs | When group chat is actually requested by users | Current groups are broken (ECDH = 2-party only). Invite links bundled here since they require working group crypto. |
-| I4 | **WebRTC voice/video** | 80 hrs | Last priority -- commoditized, high effort | Needs TURN server ($50/mo) |
-| | | **~165 hrs total** | | |
+| I1 | **Dockerfile + Docker Compose** | 3 hrs | Now (low risk) | One-command deploy, consistent environments, easier onboarding. Keep `npm run dev:*` for local dev. |
+| I2 | **S3 media storage (presigned URLs)** | 8 hrs | Before paid storage tier (R3) | Encrypted blobs go directly to/from S3 via presigned URLs. Server never handles file bytes. Removes `multer`, saves bandwidth. S3 = $0.023/GB/mo vs EBS $0.10/GB/mo. |
+| I3 | **PostgreSQL migration** | 10 hrs | When you need >1 server process or container orchestration (~500+ concurrent users) | `better-sqlite3` → `pg`. Queries are simple, schema is nearly identical. Use Supabase/Neon free tier or self-host in Docker Compose. |
+| I4 | **Large file uploads (10 GB)** | 25 hrs | After S3 (I2) + paid storage tier (R3) | Needs chunked encryption (AES-GCM 2GB limit). S3 multipart upload. Much easier with S3 than local disk. |
+| I5 | **Group E2E encryption + invite links** | 55 hrs | When group chat is actually requested by users | Current groups are broken (ECDH = 2-party only). Needs sender key distribution, key rotation, group settings UI. Invite links bundled here since they require working group crypto. |
+| I6 | **WebRTC voice/video** | 80 hrs | Last priority — commoditized, high effort | Needs TURN server ($50/mo). Consider building signaling server in Elixir as a trial. |
+| | | **~181 hrs total** | | |
+
+> **Elixir/BEAM rewrite:** Not recommended now. Elixir saves real money at ~10k+ concurrent WebSocket connections ($500+/mo in Node.js infra). At <1,000 users, both cost the same $5–20/mo. The rewrite would take 200–400 hrs and freeze all feature development. Revisit when WebSocket connection count is the actual bottleneck. If you want to test Elixir first, build the WebRTC signaling server (I6) in Elixir/Phoenix while keeping the REST API in Node.js.
 
 ---
 
@@ -925,23 +929,25 @@ Only build these when you have paying users and actual demand. Each one is a big
 | 5 | Admin dashboard (ban/review) | 10 hrs | Pre-Launch | ✅ Done |
 | 6 | Registration IP logging | 2 hrs | Pre-Launch | ✅ Done |
 | 7 | NCMEC ESP registration | 2 hrs | Pre-Launch | 🔲 Pending (paperwork) |
-| 8 | Disappearing messages | 12 hrs | Revenue | 🔲 Pending |
-| 9 | Burner rooms (no-account) | 18 hrs | Revenue | 🔲 Pending |
-| 10 | Paid storage + Stripe | 15 hrs | Revenue | 🔲 Pending |
-| 11 | Relay-only mode | 5 hrs | Revenue | 🔲 Pending |
-| 12 | Screenshot detection | 6 hrs | Revenue | 🔲 Pending |
-| 13 | Reputation/trust levels | 6 hrs | Revenue | 🔲 Pending |
-| 14 | Read receipts | 5 hrs | Engagement | 🔲 Pending |
-| 15 | Typing indicators | 3 hrs | Engagement | 🔲 Pending |
-| 16 | Message reactions | 6 hrs | Engagement | 🔲 Pending |
-| 17 | hCaptcha on registration | 4 hrs | Engagement | 🔲 Pending |
-| 18 | Message search | 8 hrs | Engagement | 🔲 Pending |
-| 19 | PWA + Push notifications | 10 hrs | Engagement | 🔲 Pending |
-| 20 | PostgreSQL migration | 10 hrs | Infra | 🔲 Pending |
-| 21 | Large file uploads (10 GB) | 25 hrs | Infra | 🔲 Pending |
-| 22 | Group E2E + invite links | 55 hrs | Infra | 🔲 Pending |
-| 23 | WebRTC calling | 80 hrs | Infra | 🔲 Pending |
-| | **TOTAL** | **~299 hrs** | | **6/23 done** |
+| 8 | Dockerfile + Docker Compose | 3 hrs | Infra | 🔲 Pending |
+| 9 | Disappearing messages | 12 hrs | Revenue | 🔲 Pending |
+| 10 | Burner rooms (no-account) | 18 hrs | Revenue | 🔲 Pending |
+| 11 | S3 media storage (presigned URLs) | 8 hrs | Infra | 🔲 Pending |
+| 12 | Paid storage + Stripe | 15 hrs | Revenue | 🔲 Pending |
+| 13 | Relay-only mode | 5 hrs | Revenue | 🔲 Pending |
+| 14 | Screenshot detection | 6 hrs | Revenue | 🔲 Pending |
+| 15 | Reputation/trust levels | 6 hrs | Revenue | 🔲 Pending |
+| 16 | Read receipts | 5 hrs | Engagement | 🔲 Pending |
+| 17 | Typing indicators | 3 hrs | Engagement | 🔲 Pending |
+| 18 | Message reactions | 6 hrs | Engagement | 🔲 Pending |
+| 19 | hCaptcha on registration | 4 hrs | Engagement | 🔲 Pending |
+| 20 | Message search | 8 hrs | Engagement | 🔲 Pending |
+| 21 | PWA + Push notifications | 10 hrs | Engagement | 🔲 Pending |
+| 22 | PostgreSQL migration | 10 hrs | Infra | 🔲 Pending |
+| 23 | Large file uploads (10 GB) | 25 hrs | Infra | 🔲 Pending |
+| 24 | Group E2E + invite links | 55 hrs | Infra | 🔲 Pending |
+| 25 | WebRTC calling | 80 hrs | Infra | 🔲 Pending |
+| | **TOTAL** | **~315 hrs** | | **6/25 done** |
 
 ---
 
@@ -981,10 +987,18 @@ Only build these when you have paying users and actual demand. Each one is a big
   
   PHASE 4: INFRA (scale when needed)
   ==================================
-  I1 PostgreSQL migration  (when >500 concurrent users)
-  I2 Large uploads         (after R3 Stripe exists)
-  I3 Group E2E + invite links (after user demand)
-  I4 WebRTC                (last -- highest effort, lowest ROI)
+  I1 Dockerfile            (can do anytime -- low risk, 3 hrs)
+  I2 S3 media storage      (before R3 Stripe -- enables large uploads)
+        |
+        v
+  I3 PostgreSQL migration  (when >500 concurrent users or multi-server)
+  I4 Large uploads ---------(after I2 S3 + R3 Stripe)
+  I5 Group E2E + invite links (after user demand)
+  I6 WebRTC                (last -- highest effort, lowest ROI)
+
+  FUTURE CONSIDERATION:
+  =====================
+  Elixir/BEAM rewrite      (only when >10k concurrent WS connections)
 ```
 
 ---
