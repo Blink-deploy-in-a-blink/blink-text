@@ -15,6 +15,7 @@ import MessageInput from './components/MessageInput.jsx';
 import NewConversationModal from './components/NewConversationModal.jsx';
 import ForwardModal from './components/ForwardModal.jsx';
 import ReportModal from './components/ReportModal.jsx';
+import AdminPanel from './components/AdminPanel.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: '#0f0f0f' },

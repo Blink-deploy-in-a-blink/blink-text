@@ -103,6 +103,36 @@ export const refreshToken = () =>
 export const submitReport = (reportedUserId, reason, { conversationId, messageId, details } = {}) =>
   api.post('/api/reports', { reportedUserId, reason, conversationId, messageId, details }).then((r) => r.data);
 
+// Admin API
+export const getAdminStats = () =>
+  api.get('/api/admin/stats').then((r) => r.data);
+
+export const getAdminReports = ({ status, page, limit } = {}) => {
+  const params = {};
+  if (status) params.status = status;
+  if (page) params.page = page;
+  if (limit) params.limit = limit;
+  return api.get('/api/admin/reports', { params }).then((r) => r.data);
+};
+
+export const updateReport = (reportId, status) =>
+  api.put(`/api/admin/reports/${reportId}`, { status }).then((r) => r.data);
+
+export const getAdminUsers = ({ search, filter, page, limit } = {}) => {
+  const params = {};
+  if (search) params.search = search;
+  if (filter) params.filter = filter;
+  if (page) params.page = page;
+  if (limit) params.limit = limit;
+  return api.get('/api/admin/users', { params }).then((r) => r.data);
+};
+
+export const banUser = (userId) =>
+  api.post(`/api/admin/ban/${userId}`).then((r) => r.data);
+
+export const unbanUser = (userId) =>
+  api.post(`/api/admin/unban/${userId}`).then((r) => r.data);
+
 /**
  * Upload encrypted media binary to the server.
  * @param {string} conversationId

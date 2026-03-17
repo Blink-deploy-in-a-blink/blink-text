@@ -17,6 +17,85 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// GET /api/admin/stats — dashboard statistics
+router.get('/stats', authenticateToken, requireAdmin, (_req, res) => {
+  try {
+    const pendingReports = db.prepare('SELECT COUNT(*) as count FROM reports WHERE status = ?').get('pending').count;
+    const reviewedReports = db.prepare('SELECT COUNT(*) as count FROM reports WHERE status = ?').get('reviewed').count;
+    const dismissedReports = db.prepare('SELECT COUNT(*) as count FROM reports WHERE status = ?').get('dismissed').count;
+    const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users WHERE deleted_at IS NULL').get().count;
+    const bannedUsers = db.prepare('SELECT COUNT(*) as count FROM users WHERE is_banned = 1 AND deleted_at IS NULL').get().count;
+
+    return res.json({
+      reports: { pending: pendingReports, reviewed: reviewedReports, dismissed: dismissedReports },
+      users: { total: totalUsers, banned: bannedUsers },
+    });
+  } catch (err) {
+    console.error('Admin stats error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/admin/users — list users (paginated, searchable)
+router.get('/users', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+    const search = req.query.search?.trim();
+    const filter = req.query.filter; // 'banned', 'active', 'all'
+
+    let query = 'SELECT id, username, is_admin, is_banned, registration_ip, created_at, deleted_at FROM users';
+    let countQuery = 'SELECT COUNT(*) as total FROM users';
+    const conditions = [];
+    const params = [];
+
+    if (search) {
+      conditions.push('username LIKE ?');
+      params.push(`%${search}%`);
+    }
+
+    if (filter === 'banned') {
+      conditions.push('is_banned = 1');
+    } else if (filter === 'active') {
+      conditions.push('is_banned = 0 AND deleted_at IS NULL');
+    }
+
+    if (conditions.length > 0) {
+      const whereClause = ' WHERE ' + conditions.join(' AND ');
+      query += whereClause;
+      countQuery += whereClause;
+    }
+
+    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+
+    const countParams = [...params];
+    params.push(limit, offset);
+
+    const users = db.prepare(query).all(...params);
+    const { total } = db.prepare(countQuery).get(...countParams);
+
+    // Get report counts per user
+    const reportCounts = {};
+    for (const u of users) {
+      const result = db.prepare('SELECT COUNT(*) as count FROM reports WHERE reported_user_id = ?').get(u.id);
+      reportCounts[u.id] = result.count;
+    }
+
+    const usersWithReports = users.map(u => ({
+      ...u,
+      is_admin: !!u.is_admin,
+      is_banned: !!u.is_banned,
+      report_count: reportCounts[u.id] || 0,
+    }));
+
+    return res.json({ users: usersWithReports, total, page, limit });
+  } catch (err) {
+    console.error('List users error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/admin/reports — list reports (optionally filter by status)
 router.get('/reports', authenticateToken, requireAdmin, (req, res) => {
   try {

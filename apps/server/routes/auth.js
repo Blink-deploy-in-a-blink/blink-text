@@ -59,7 +59,7 @@ router.post(
       ).run(id, username, password_hash, registrationIp);
 
       const token = signToken({ id, username });
-      return res.status(201).json({ token, user: { id, username } });
+      return res.status(201).json({ token, user: { id, username, is_admin: false } });
     } catch (err) {
       console.error('Register error:', err);
       return res.status(500).json({ error: 'Internal server error' });
@@ -105,7 +105,7 @@ router.post(
       const token = signToken({ id: user.id, username: user.username });
       return res.json({
         token,
-        user: { id: user.id, username: user.username },
+        user: { id: user.id, username: user.username, is_admin: !!user.is_admin },
       });
     } catch (err) {
       console.error('Login error:', err);
@@ -118,12 +118,12 @@ router.post(
 router.post('/refresh', authenticateToken, (req, res) => {
   try {
     // Verify user still exists and is not deleted
-    const user = db.prepare('SELECT id, username, deleted_at FROM users WHERE id = ?').get(req.user.id);
+    const user = db.prepare('SELECT id, username, deleted_at, is_admin FROM users WHERE id = ?').get(req.user.id);
     if (!user || user.deleted_at) {
       return res.status(401).json({ error: 'Account no longer exists' });
     }
     const token = signToken({ id: user.id, username: user.username });
-    return res.json({ token });
+    return res.json({ token, user: { id: user.id, username: user.username, is_admin: !!user.is_admin } });
   } catch (err) {
     console.error('Token refresh error:', err);
     return res.status(500).json({ error: 'Internal server error' });

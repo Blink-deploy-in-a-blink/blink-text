@@ -70,8 +70,15 @@ export function useAuth() {
       connectSocket(token);
       // Refresh the token so the 30-day window restarts every time the app is opened
       apiRefreshToken()
-        .then(({ token: newToken }) => {
+        .then(({ token: newToken, user: refreshedUser }) => {
           localStorage.setItem('blink-token', newToken);
+          // Update is_admin flag from server (may have changed since last login)
+          if (refreshedUser) {
+            const current = JSON.parse(localStorage.getItem('blink-user') || '{}');
+            const updated = { ...current, is_admin: refreshedUser.is_admin };
+            localStorage.setItem('blink-user', JSON.stringify(updated));
+            setUser(updated);
+          }
         })
         .catch(() => {
           // Token may have expired or been invalidated — auto-logout will trigger
