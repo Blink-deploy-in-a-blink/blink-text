@@ -94,6 +94,15 @@ const userColumns = db.prepare("PRAGMA table_info(users)").all().map(c => c.name
 if (!userColumns.includes('deleted_at')) {
   db.exec("ALTER TABLE users ADD COLUMN deleted_at INTEGER DEFAULT NULL");
 }
+if (!userColumns.includes('registration_ip')) {
+  db.exec("ALTER TABLE users ADD COLUMN registration_ip TEXT DEFAULT NULL");
+}
+if (!userColumns.includes('is_admin')) {
+  db.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+}
+if (!userColumns.includes('is_banned')) {
+  db.exec("ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0");
+}
 
 const messageColumns = db.prepare("PRAGMA table_info(messages)").all().map(c => c.name);
 if (!messageColumns.includes('message_type')) {
@@ -105,5 +114,25 @@ if (!messageColumns.includes('media_id')) {
 if (!messageColumns.includes('chain_idx')) {
   db.exec("ALTER TABLE messages ADD COLUMN chain_idx INTEGER DEFAULT NULL");
 }
+
+// Reports table for user reporting mechanism
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reports (
+    id TEXT PRIMARY KEY,
+    reporter_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reported_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    message_id TEXT,
+    reason TEXT NOT NULL,
+    details TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'reviewed', 'dismissed')),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    reviewed_at INTEGER DEFAULT NULL,
+    reviewed_by TEXT DEFAULT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+  CREATE INDEX IF NOT EXISTS idx_reports_reported_user ON reports(reported_user_id);
+`);
 
 module.exports = db;

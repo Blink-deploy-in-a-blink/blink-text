@@ -13,11 +13,36 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(__dirname, 'uploads');
 
+// WebSocket rate limiting: max messages per window per user
+const WS_RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
+const WS_RATE_LIMIT_MAX = 30;           // max 30 messages per window
+
+/**
+ * Simple in-memory rate limiter for WebSocket events.
+ * Returns true if the event should be allowed, false if rate-limited.
+ */
+function createWsRateLimiter() {
+  const buckets = new Map(); // userId -> { count, resetAt }
+
+  return function isAllowed(userId) {
+    const now = Date.now();
+    let bucket = buckets.get(userId);
+    if (!bucket || now >= bucket.resetAt) {
+      bucket = { count: 0, resetAt: now + WS_RATE_LIMIT_WINDOW_MS };
+      buckets.set(userId, bucket);
+    }
+    bucket.count++;
+    return bucket.count <= WS_RATE_LIMIT_MAX;
+  };
+}
+
 /**
  * Registers all Socket.io event handlers on the given io instance.
  * @param {import('socket.io').Server} io
  */
 function registerSocketHandlers(io) {
+  const wsRateCheck = createWsRateLimiter();
+
   io.use((socket, next) => {
     const token = socket.handshake.auth && socket.handshake.auth.token;
     if (!token) return next(new Error('Authentication token required'));
@@ -70,6 +95,12 @@ function registerSocketHandlers(io) {
 
     // send_message: validate, persist, relay encrypted message using EncryptedMessage format
     socket.on('send_message', (msg, ack) => {
+      // Rate limit: reject if user is sending too fast
+      if (!wsRateCheck(userId)) {
+        if (typeof ack === 'function') ack({ error: 'Rate limit exceeded. Please slow down.' });
+        return;
+      }
+
       // Build the validated payload from only the fields we trust.
       // conversationId, id, timestamp, and payload come from the client;
       // senderId is always taken from the authenticated socket user.
@@ -132,6 +163,8 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('key_exchange', (payload) => {
+      if (!wsRateCheck(userId)) return; // silently drop if rate-limited
+
       const normalized = { ...payload, userId };
       const { valid } = validateKeyExchange(normalized);
       if (!valid) return;
@@ -166,6 +199,11 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('edit_message', ({ conversationId, messageId, payload: encPayload }, ack) => {
+      if (!wsRateCheck(userId)) {
+        if (typeof ack === 'function') ack({ error: 'Rate limit exceeded. Please slow down.' });
+        return;
+      }
+
       if (!conversationId || !messageId || !encPayload) {
         if (typeof ack === 'function') ack({ error: 'Missing fields' });
         return;

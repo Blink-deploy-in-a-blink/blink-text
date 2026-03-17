@@ -15,10 +15,15 @@ const keysRoutes = require('./routes/keys');
 const devicesRoutes = require('./routes/devices');
 const usersRoutes = require('./routes/users');
 const mediaRoutes = require('./routes/media');
+const reportRoutes = require('./routes/reports');
+const adminRoutes = require('./routes/admin');
 const { registerSocketHandlers } = require('./websocket');
 
 const app = express();
 const httpServer = http.createServer(app);
+
+// Trust proxy so req.ip returns the real client IP behind reverse proxies
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -70,6 +75,8 @@ app.use('/api/keys', keysRoutes);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 

@@ -51,9 +51,12 @@ router.post(
       const password_hash = await bcrypt.hash(password, 12);
       const id = uuidv4();
 
+      // Capture registration IP for law enforcement compliance
+      const registrationIp = req.ip || req.connection?.remoteAddress || null;
+
       db.prepare(
-        'INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)'
-      ).run(id, username, password_hash);
+        'INSERT INTO users (id, username, password_hash, registration_ip) VALUES (?, ?, ?, ?)'
+      ).run(id, username, password_hash, registrationIp);
 
       const token = signToken({ id, username });
       return res.status(201).json({ token, user: { id, username } });
@@ -88,6 +91,10 @@ router.post(
 
       if (user.deleted_at) {
         return res.status(401).json({ error: 'This account has been deleted' });
+      }
+
+      if (user.is_banned) {
+        return res.status(403).json({ error: 'This account has been suspended' });
       }
 
       const valid = await bcrypt.compare(password, user.password_hash);

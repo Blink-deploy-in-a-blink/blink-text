@@ -100,6 +100,9 @@ export const deleteAccount = (password, deleteConversations = false) =>
 export const refreshToken = () =>
   api.post('/api/auth/refresh').then((r) => r.data);
 
+export const submitReport = (reportedUserId, reason, { conversationId, messageId, details } = {}) =>
+  api.post('/api/reports', { reportedUserId, reason, conversationId, messageId, details }).then((r) => r.data);
+
 /**
  * Upload encrypted media binary to the server.
  * @param {string} conversationId

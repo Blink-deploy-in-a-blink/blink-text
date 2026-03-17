@@ -252,7 +252,7 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
   return null;
 }
 
-export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onNewConversation, onBack }) {
+export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onReport, onNewConversation, onBack }) {
   const bottomRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y, msg }
@@ -352,6 +352,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
     if (action === 'edit') onEditMessage?.(msg);
     if (action === 'reply') onReply?.(msg);
     if (action === 'forward') onForward?.(msg);
+    if (action === 'report') onReport?.(msg);
     if (action === 'download') {
       // For media messages, trigger a download of the media content
       const meta = parseMediaMeta(msg.plaintext);
@@ -538,6 +539,14 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
               onMouseLeave={(e) => (e.target.style.background = 'transparent')}
               onClick={() => handleAction('download')}>
               ⬇ Download
+            </button>
+          )}
+          {menu.msg.senderId !== myUserId && (
+            <button style={s.menuItem}
+              onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
+              onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+              onClick={() => handleAction('report')}>
+              🚩 Report
             </button>
           )}
           <button style={s.menuItem}

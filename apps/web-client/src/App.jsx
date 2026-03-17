@@ -14,6 +14,7 @@ import ChatWindow from './components/ChatWindow.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import NewConversationModal from './components/NewConversationModal.jsx';
 import ForwardModal from './components/ForwardModal.jsx';
+import ReportModal from './components/ReportModal.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: '#0f0f0f' },
@@ -44,6 +45,7 @@ function MessengerView({ user, logout }) {
   const [replyTo, setReplyTo] = useState(null);
   const [editingMsg, setEditingMsg] = useState(null);
   const [forwardingMsg, setForwardingMsg] = useState(null); // message to forward
+  const [reportTarget, setReportTarget] = useState(null); // { userId, username, conversationId, messageId }
   const conversationListRef = useRef(null);
   // Force re-render key for unread badges
   const [, setUnreadTick] = useState(0);
@@ -229,6 +231,20 @@ function MessengerView({ user, logout }) {
     }
   };
 
+  const handleReport = (msg) => {
+    // Look up the sender's username from participant info
+    const ids = (activeConversation?.participant_ids || '').split(',');
+    const names = (activeConversation?.participant_usernames || '').split(',');
+    const idx = ids.indexOf(msg.senderId);
+    const senderUsername = idx >= 0 ? names[idx] : 'Unknown user';
+    setReportTarget({
+      userId: msg.senderId,
+      username: senderUsername,
+      conversationId: activeConversation?.id,
+      messageId: msg.id,
+    });
+  };
+
   // On mobile: show sidebar when no conversation selected, show chat when one is selected
   const showSidebar = !isMobile || !activeConversation;
   const showChat = !isMobile || !!activeConversation;
@@ -268,6 +284,7 @@ function MessengerView({ user, logout }) {
             onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
             onReply={(msg) => { setReplyTo(msg); setEditingMsg(null); }}
             onForward={(msg) => setForwardingMsg(msg)}
+            onReport={handleReport}
             onNewConversation={() => setShowNewModal(true)}
             onBack={isMobile ? handleBack : null}
           />
@@ -300,6 +317,16 @@ function MessengerView({ user, logout }) {
           currentConversationId={activeConversation?.id}
           onForward={handleForward}
           onClose={() => setForwardingMsg(null)}
+        />
+      )}
+
+      {reportTarget && (
+        <ReportModal
+          reportedUserId={reportTarget.userId}
+          reportedUsername={reportTarget.username}
+          conversationId={reportTarget.conversationId}
+          messageId={reportTarget.messageId}
+          onClose={() => setReportTarget(null)}
         />
       )}
     </div>
