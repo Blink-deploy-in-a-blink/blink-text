@@ -60,10 +60,15 @@ function registerSocketHandlers(io) {
 
       // Check ban/deletion status in DB so bans take effect immediately,
       // even if the JWT hasn't expired yet.
-      const dbUser = db.prepare('SELECT is_banned, deleted_at FROM users WHERE id = ?').get(user.id);
+      const dbUser = db.prepare('SELECT is_banned, deleted_at, session_nonce FROM users WHERE id = ?').get(user.id);
       if (!dbUser) return next(new Error('User not found'));
       if (dbUser.is_banned) return next(new Error('Account suspended'));
       if (dbUser.deleted_at) return next(new Error('Account deleted'));
+
+      // Single-session enforcement: reject if nonce doesn't match
+      if (dbUser.session_nonce && user.nonce !== dbUser.session_nonce) {
+        return next(new Error('session_expired'));
+      }
 
       socket.user = user;
       next();
@@ -154,6 +159,21 @@ function registerSocketHandlers(io) {
         const messageType = (msg && msg.messageType) || 'text';
         const mediaId = (msg && msg.mediaId) || null;
         const chainIdx = (encPayload.chainIdx != null) ? encPayload.chainIdx : null;
+
+        // Check if sender is blocked by any participant or has blocked any participant
+        const otherParticipants = db.prepare(
+          'SELECT user_id FROM conversation_participants WHERE conversation_id = ? AND user_id != ?'
+        ).all(conversationId, userId);
+
+        for (const p of otherParticipants) {
+          const blocked = db.prepare(
+            'SELECT 1 FROM user_blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)'
+          ).get(userId, p.user_id, p.user_id, userId);
+          if (blocked) {
+            if (typeof ack === 'function') ack({ error: 'Cannot send messages — one of you has blocked the other' });
+            return;
+          }
+        }
 
         db.prepare(
           'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp, message_type, media_id, chain_idx) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'

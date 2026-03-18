@@ -21,6 +21,7 @@ import TermsOfService from './components/TermsOfService.jsx';
 import PrivacyPolicy from './components/PrivacyPolicy.jsx';
 import WelcomePage from './components/WelcomePage.jsx';
 import HelpPage from './components/HelpPage.jsx';
+import SessionExpiredModal from './components/SessionExpiredModal.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' },
@@ -174,7 +175,7 @@ function MessengerView({ user, logout, onShowHelp }) {
     return () => { socket.off('new_conversation', handleNewConversation); };
   }, [user.id]);
 
-  const { messages, loading: msgLoading, loadingMore, hasMore, loadMore, sendMessage, sendMediaMessage, deleteMessage, editMessage } = useMessages(
+  const { messages, loading: msgLoading, loadingMore, hasMore, keyReady, loadMore, sendMessage, sendMediaMessage, deleteMessage, editMessage } = useMessages(
     activeConversation?.id || null,
     user.id
   );
@@ -303,6 +304,7 @@ function MessengerView({ user, logout, onShowHelp }) {
                 loading={msgLoading}
                 loadingMore={loadingMore}
                 hasMore={hasMore}
+                keyReady={keyReady}
                 onLoadMore={loadMore}
                 onDeleteMessage={deleteMessage}
                 onEditMessage={(msg) => { setEditingMsg(msg); setReplyTo(null); }}
@@ -322,6 +324,7 @@ function MessengerView({ user, logout, onShowHelp }) {
                 onCancelReply={() => setReplyTo(null)}
                 onCancelEdit={() => setEditingMsg(null)}
                 peerDeleted={!!activeConversation?.has_deleted_participant}
+                keyReady={keyReady}
               />
             </div>
           )}
@@ -362,6 +365,19 @@ function MessengerView({ user, logout, onShowHelp }) {
 export default function App() {
   const { user, login, register, logout, ready, identityError, retryIdentity } = useAuth();
   const [view, setView] = useState('welcome');
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  // Listen for session-expired events from the API interceptor or WebSocket
+  useEffect(() => {
+    const handler = () => setSessionExpired(true);
+    window.addEventListener('blink-session-expired', handler);
+    return () => window.removeEventListener('blink-session-expired', handler);
+  }, []);
+
+  // Show the session expired modal on top of everything
+  if (sessionExpired) {
+    return <SessionExpiredModal />;
+  }
 
   if (!ready) {
     return (

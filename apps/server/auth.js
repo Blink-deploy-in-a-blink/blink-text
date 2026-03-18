@@ -36,7 +36,7 @@ function authenticateToken(req, res, next) {
     // Check ban/deletion status in the DB so bans are enforced immediately,
     // even if the JWT hasn't expired yet.
     const db = require('./db');
-    const dbUser = db.prepare('SELECT is_banned, deleted_at FROM users WHERE id = ?').get(user.id);
+    const dbUser = db.prepare('SELECT is_banned, deleted_at, session_nonce FROM users WHERE id = ?').get(user.id);
     if (!dbUser) {
       return res.status(401).json({ error: 'User not found' });
     }
@@ -45,6 +45,15 @@ function authenticateToken(req, res, next) {
     }
     if (dbUser.deleted_at) {
       return res.status(401).json({ error: 'This account has been deleted' });
+    }
+
+    // Single-session enforcement: if the JWT's nonce doesn't match the DB,
+    // the user logged in from another device and this session is stale.
+    if (dbUser.session_nonce && user.nonce !== dbUser.session_nonce) {
+      return res.status(401).json({
+        error: 'Session expired — you signed in on another device',
+        reason: 'session_expired',
+      });
     }
 
     req.user = user;

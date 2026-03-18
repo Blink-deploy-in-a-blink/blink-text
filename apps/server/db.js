@@ -115,6 +115,14 @@ if (!messageColumns.includes('chain_idx')) {
   db.exec("ALTER TABLE messages ADD COLUMN chain_idx INTEGER DEFAULT NULL");
 }
 
+// Session nonce for single-session enforcement.
+// Each login generates a fresh nonce stored in the DB and embedded in the JWT.
+// Every authenticated request checks that the JWT's nonce matches the DB.
+// If another device logs in, the nonce changes and the old JWT is instantly invalid.
+if (!userColumns.includes('session_nonce')) {
+  db.exec("ALTER TABLE users ADD COLUMN session_nonce TEXT DEFAULT NULL");
+}
+
 // Reports table for user reporting mechanism
 db.exec(`
   CREATE TABLE IF NOT EXISTS reports (
@@ -133,6 +141,18 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
   CREATE INDEX IF NOT EXISTS idx_reports_reported_user ON reports(reported_user_id);
+`);
+
+// User blocks table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_blocks (
+    blocker_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blocked_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (blocker_id, blocked_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON user_blocks(blocker_id);
+  CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON user_blocks(blocked_id);
 `);
 
 module.exports = db;

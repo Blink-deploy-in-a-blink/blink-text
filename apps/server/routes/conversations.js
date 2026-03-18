@@ -89,6 +89,16 @@ router.post(
         if (!user) return res.status(400).json({ error: `User ${uid} not found` });
       }
 
+      // Check for blocks between the creator and any participant
+      for (const uid of participants) {
+        const blocked = db.prepare(
+          'SELECT 1 FROM user_blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)'
+        ).get(req.user.id, uid, uid, req.user.id);
+        if (blocked) {
+          return res.status(403).json({ error: 'Cannot create conversation — one of you has blocked the other' });
+        }
+      }
+
       const conversationId = uuidv4();
       const createConversation = db.transaction(() => {
         db.prepare('INSERT INTO conversations (id, type, name) VALUES (?, ?, ?)').run(conversationId, type, name || null);
@@ -312,5 +322,39 @@ router.delete(
     }
   }
 );
+
+// DELETE /api/conversations/:id/clear — clear all messages in a conversation for the current user
+router.delete('/:id/clear', [param('id').isUUID()], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+  try {
+    const participant = db.prepare(
+      'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+    ).get(req.params.id, req.user.id);
+    if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
+
+    // Soft-delete all messages in this conversation for the current user
+    const allMessages = db.prepare(
+      'SELECT id FROM messages WHERE conversation_id = ?'
+    ).all(req.params.id);
+
+    const insertDeletion = db.prepare(
+      'INSERT OR IGNORE INTO message_deletions (message_id, user_id) VALUES (?, ?)'
+    );
+
+    const clearAll = db.transaction(() => {
+      for (const msg of allMessages) {
+        insertDeletion.run(msg.id, req.user.id);
+      }
+    });
+    clearAll();
+
+    return res.json({ cleared: true, count: allMessages.length });
+  } catch (err) {
+    console.error('Clear chat error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 module.exports = router;

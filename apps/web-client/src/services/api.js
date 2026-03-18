@@ -36,6 +36,10 @@ api.interceptors.response.use(
       !(error.config.url?.includes('/api/admin/verify') && error.response.status === 403)
     ) {
       isLoggingOut = true;
+
+      // Detect if the session was invalidated by a login on another device
+      const isSessionExpired = error.response.data?.reason === 'session_expired';
+
       console.warn('[api] Token expired or invalid — clearing session');
       // Only clear session keys, NOT crypto keys (ephemeral keys, device ID)
       // so old messages can still be decrypted after re-login
@@ -43,8 +47,14 @@ api.interceptors.response.use(
       localStorage.removeItem('blink-user');
       localStorage.removeItem('blink-active-conv');
       sessionStorage.removeItem('blink-session');
-      // Reload to reset all state cleanly
-      window.location.reload();
+
+      if (isSessionExpired) {
+        // Dispatch a custom event so App.jsx can show a styled popup
+        window.dispatchEvent(new CustomEvent('blink-session-expired'));
+      } else {
+        // Normal expiry — just reload
+        window.location.reload();
+      }
     }
     return Promise.reject(error);
   }
@@ -189,3 +199,22 @@ export const downloadMedia = async (mediaId) => {
     version: response.headers['x-media-version'] || 'v1',
   };
 };
+
+// ── Block / Unblock ──
+
+export const blockUser = (userId) =>
+  api.post(`/api/blocks/${userId}`).then((r) => r.data);
+
+export const unblockUser = (userId) =>
+  api.delete(`/api/blocks/${userId}`).then((r) => r.data);
+
+export const getBlocks = () =>
+  api.get('/api/blocks').then((r) => r.data.blocks);
+
+export const checkBlocked = (userId) =>
+  api.get(`/api/blocks/check/${userId}`).then((r) => r.data.blocked);
+
+// ── Clear chat ──
+
+export const clearChat = (conversationId) =>
+  api.delete(`/api/conversations/${conversationId}/clear`).then((r) => r.data);

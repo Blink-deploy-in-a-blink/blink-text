@@ -277,7 +277,7 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
   return null;
 }
 
-export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onReport, onNewConversation, onBack }) {
+export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, keyReady, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onReport, onNewConversation, onBack }) {
   const bottomRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y, msg }
@@ -503,6 +503,19 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
           This user has deleted their account. You can no longer send messages.
         </div>
       )}
+      {conversation && !keyReady && !conversation.has_deleted_participant && (
+        <div style={{
+          padding: '0.6rem 1.25rem', background: 'rgba(99, 102, 241, 0.06)',
+          borderBottom: '1px solid var(--border-light)',
+          color: 'var(--accent)', fontSize: 'var(--text-xs)', textAlign: 'center', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <span>Waiting for <strong>{conversation.displayName || 'the other user'}</strong> to come online to establish encryption… You can still type — messages will be sent automatically.</span>
+        </div>
+      )}
       <div style={s.messages} ref={messagesContainerRef}>
         {loadingMore && <p style={{ ...s.empty, padding: '0.5rem', fontSize: '0.8rem' }}>Loading older messages…</p>}
         {!loadingMore && hasMore && (
@@ -555,15 +568,25 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 ) : (
                   <div style={msg.plaintext === '[unable to decrypt]'
                     ? { ...s.bubble(mine), background: 'var(--bg-elevated)', border: '1px dashed var(--border-light)', fontStyle: 'italic', color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }
+                    : msg._queued
+                    ? { ...s.bubble(mine), opacity: 0.6 }
                     : s.bubble(mine)
                   }>
                     {msg.plaintext === '[unable to decrypt]'
                       ? '🔒 This message can\'t be decrypted — encryption keys have changed'
                       : msg.plaintext}
                     {msg.edited && <span style={s.edited}>(edited)</span>}
+                    {msg._failed && <span style={{ ...s.edited, color: 'var(--danger-muted)' }}> (failed)</span>}
                   </div>
                 )}
-                <div style={s.meta(mine)}>{formatTime(msg.timestamp)}</div>
+                <div style={s.meta(mine)}>
+                  {msg._queued && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', marginRight: '0.25rem', opacity: 0.6 }}>
+                      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                  )}
+                  {formatTime(msg.timestamp)}
+                </div>
               </div>
             </div>
           );

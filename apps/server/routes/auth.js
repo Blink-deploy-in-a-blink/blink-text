@@ -132,7 +132,12 @@ router.post(
         'INSERT INTO users (id, username, password_hash, registration_ip) VALUES (?, ?, ?, ?)'
       ).run(id, username, password_hash, registrationIp);
 
-      const token = signToken({ id, username });
+      // Generate a session nonce so only this session is valid.
+      // If the user logs in elsewhere, a new nonce is generated and this JWT is invalidated.
+      const sessionNonce = crypto.randomBytes(16).toString('hex');
+      db.prepare('UPDATE users SET session_nonce = ? WHERE id = ?').run(sessionNonce, id);
+
+      const token = signToken({ id, username, nonce: sessionNonce });
       return res.status(201).json({ token, user: { id, username } });
     } catch (err) {
       console.error('Register error:', err);
@@ -176,7 +181,12 @@ router.post(
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      const token = signToken({ id: user.id, username: user.username });
+      // Generate a fresh session nonce — invalidates any previous session immediately.
+      // The old JWT will fail nonce checks on the next API call or WebSocket event.
+      const sessionNonce = crypto.randomBytes(16).toString('hex');
+      db.prepare('UPDATE users SET session_nonce = ? WHERE id = ?').run(sessionNonce, user.id);
+
+      const token = signToken({ id: user.id, username: user.username, nonce: sessionNonce });
       return res.json({
         token,
         user: { id: user.id, username: user.username },
@@ -192,11 +202,12 @@ router.post(
 router.post('/refresh', authenticateToken, (req, res) => {
   try {
     // Verify user still exists and is not deleted
-    const user = db.prepare('SELECT id, username, deleted_at FROM users WHERE id = ?').get(req.user.id);
+    const user = db.prepare('SELECT id, username, deleted_at, session_nonce FROM users WHERE id = ?').get(req.user.id);
     if (!user || user.deleted_at) {
       return res.status(401).json({ error: 'Account no longer exists' });
     }
-    const token = signToken({ id: user.id, username: user.username });
+    // Re-use the current session nonce (don't generate a new one — refresh ≠ new login)
+    const token = signToken({ id: user.id, username: user.username, nonce: user.session_nonce });
     return res.json({ token });
   } catch (err) {
     console.error('Token refresh error:', err);

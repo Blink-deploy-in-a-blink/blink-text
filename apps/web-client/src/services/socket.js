@@ -16,6 +16,21 @@ export function connectSocket(token) {
     reconnection: true,
     reconnectionAttempts: 5,
   });
+
+  // Listen for connection errors caused by session invalidation
+  socket.on('connect_error', (err) => {
+    if (err?.message === 'session_expired') {
+      console.warn('[socket] Session expired — signed in on another device');
+      localStorage.removeItem('blink-token');
+      localStorage.removeItem('blink-user');
+      localStorage.removeItem('blink-active-conv');
+      sessionStorage.removeItem('blink-session');
+      socket.disconnect();
+      socket = null;
+      window.dispatchEvent(new CustomEvent('blink-session-expired'));
+    }
+  });
+
   return socket;
 }
 

@@ -860,9 +860,11 @@ These are not optional. Launching publicly without these = getting shut down, fl
 | P5 | **Admin dashboard (ban/review)** | 10 hrs | ✅ Done | If someone reports illegal content and you can't act on it, you lose safe harbor protection. | Legal |
 | P6 | **Registration IP logging** | 2 hrs | ✅ Done | When (not if) law enforcement asks "who registered this account?", you need an answer. Log IP on registration only. | Legal |
 | P7 | **NCMEC ESP registration** | 2 hrs | 🔲 Pending | US federal law. If you host in the US and gain knowledge of CSAM, you MUST be registered to report it. Paperwork, not code. | Legal |
-| | | **~36 hrs total** | **6/7 done** | | |
+| P8 | **Single-session enforcement** | 0.5 hrs | ✅ Done | ECDH keypairs differ per device — logging in from two devices breaks decryption. Session nonce in JWT invalidates old sessions on new login. | Security |
+| P9 | **Block user / Clear chat** | 3 hrs | ✅ Done | Users need to block abusive contacts and clear conversation history. Context menu on conversations. | Trust & Safety |
+| | | **~41.5 hrs total** | **8/9 done** | | |
 
-**P1–P6 are complete.** Only P7 remains (paperwork, not code).
+**P1–P6, P8–P9 are complete.** Only P7 remains (paperwork, not code).
 
 > **Note on group chats:** Group conversations exist in the DB but are **not functional** — the current crypto (ECDH P-256) only supports 2-party key exchange. Group E2E encryption (~50 hrs) and group invite links must be built together in Phase 4 (I3). Do not expose group chat creation in the UI until then.
 
@@ -875,8 +877,8 @@ These are what make people pay. Build in this exact order -- each one unlocks th
 | # | Feature | Time | Revenue Impact | Why This Order |
 |---|---------|------|---------------|----------------|
 | R1 | **Disappearing messages** | 12 hrs | Unlocks Pro tier -- the #1 feature privacy users expect | Must exist before you can sell "Pro" |
-| R2 | **Burner rooms (no-account)** | 18 hrs | Viral growth engine + paid room upgrades | Your biggest USP over Signal. Drives signups. |
-| R3 | **Paid storage tiers (Stripe)** | 15 hrs | **Direct recurring revenue** | Can't charge until R1/R2 give people a reason to pay |
+| R2 | **Burner rooms (no-account)** | 18 hrs | Viral growth engine + paid room upgrades | ⚠️ **Requires Group E2E encryption (I5) first** — multiple anonymous users in one room = group key exchange. Build I5 before R2. |
+| R3 | **Paid storage tiers (Stripe)** | 15 hrs | **Direct recurring revenue** | Can't charge until R1 gives people a reason to pay |
 | R4 | **Relay-only mode** | 5 hrs | Pro upsell -- "Zero-Trace" messaging | Quick win, high perceived value, low effort |
 | R5 | **Screenshot detection** | 6 hrs | Pro upsell -- privacy power users | Easy to build, visible differentiator |
 | R6 | **Reputation/trust levels** | 6 hrs | Spam prevention at scale (needed as users grow) | Growth creates spam; this handles it without PII |
@@ -910,9 +912,10 @@ Build these incrementally as your user base and revenue grow. Dockerfile is low-
 | I2 | **S3 media storage (presigned URLs)** | 8 hrs | Before paid storage tier (R3) | Encrypted blobs go directly to/from S3 via presigned URLs. Server never handles file bytes. Removes `multer`, saves bandwidth. S3 = $0.023/GB/mo vs EBS $0.10/GB/mo. |
 | I3 | **PostgreSQL migration** | 10 hrs | When you need >1 server process or container orchestration (~500+ concurrent users) | `better-sqlite3` → `pg`. Queries are simple, schema is nearly identical. Use Supabase/Neon free tier or self-host in Docker Compose. |
 | I4 | **Large file uploads (10 GB)** | 25 hrs | After S3 (I2) + paid storage tier (R3) | Needs chunked encryption (AES-GCM 2GB limit). S3 multipart upload. Much easier with S3 than local disk. |
-| I5 | **Group E2E encryption + invite links** | 55 hrs | When group chat is actually requested by users | Current groups are broken (ECDH = 2-party only). Needs sender key distribution, key rotation, group settings UI. Invite links bundled here since they require working group crypto. |
-| I6 | **WebRTC voice/video** | 80 hrs | Last priority — commoditized, high effort | Needs TURN server ($50/mo). Consider building signaling server in Elixir as a trial. |
-| | | **~181 hrs total** | | |
+| I5 | **Group E2E encryption + invite links** | 55 hrs | When group chat is actually requested by users | Current groups are broken (ECDH = 2-party only). Needs sender key distribution, key rotation, group settings UI. Invite links bundled here since they require working group crypto. **Burner rooms (R2) depend on this.** |
+| I6 | **Multi-device support (per-device encryption)** | 40 hrs | After group E2E (I5) — shares the same encrypt-to-N-keys pattern | Currently single-session enforced (login = old session invalidated). Full multi-device needs: per-device key registration, encrypt-to-all-devices (fan-out), device management UI, device-to-device key sync. Shares sender-key infrastructure with I5. |
+| I7 | **WebRTC voice/video** | 80 hrs | Last priority — commoditized, high effort | Needs TURN server ($50/mo). Consider building signaling server in Elixir as a trial. |
+| | | **~221 hrs total** | | |
 
 > **Elixir/BEAM rewrite:** Not recommended now. Elixir saves real money at ~10k+ concurrent WebSocket connections ($500+/mo in Node.js infra). At <1,000 users, both cost the same $5–20/mo. The rewrite would take 200–400 hrs and freeze all feature development. Revisit when WebSocket connection count is the actual bottleneck. If you want to test Elixir first, build the WebRTC signaling server (I6) in Elixir/Phoenix while keeping the REST API in Node.js.
 
@@ -928,26 +931,29 @@ Build these incrementally as your user base and revenue grow. Dockerfile is low-
 | 4 | Report button + admin queue | 8 hrs | Pre-Launch | ✅ Done |
 | 5 | Admin dashboard (ban/review) | 10 hrs | Pre-Launch | ✅ Done |
 | 6 | Registration IP logging | 2 hrs | Pre-Launch | ✅ Done |
-| 7 | NCMEC ESP registration | 2 hrs | Pre-Launch | 🔲 Pending (paperwork) |
-| 8 | Dockerfile + Docker Compose | 3 hrs | Infra | 🔲 Pending |
-| 9 | Disappearing messages | 12 hrs | Revenue | 🔲 Pending |
-| 10 | Burner rooms (no-account) | 18 hrs | Revenue | 🔲 Pending |
-| 11 | S3 media storage (presigned URLs) | 8 hrs | Infra | 🔲 Pending |
-| 12 | Paid storage + Stripe | 15 hrs | Revenue | 🔲 Pending |
-| 13 | Relay-only mode | 5 hrs | Revenue | 🔲 Pending |
-| 14 | Screenshot detection | 6 hrs | Revenue | 🔲 Pending |
-| 15 | Reputation/trust levels | 6 hrs | Revenue | 🔲 Pending |
-| 16 | Read receipts | 5 hrs | Engagement | 🔲 Pending |
-| 17 | Typing indicators | 3 hrs | Engagement | 🔲 Pending |
-| 18 | Message reactions | 6 hrs | Engagement | 🔲 Pending |
-| 19 | hCaptcha on registration | 4 hrs | Engagement | 🔲 Pending |
-| 20 | Message search | 8 hrs | Engagement | 🔲 Pending |
-| 21 | PWA + Push notifications | 10 hrs | Engagement | 🔲 Pending |
-| 22 | PostgreSQL migration | 10 hrs | Infra | 🔲 Pending |
-| 23 | Large file uploads (10 GB) | 25 hrs | Infra | 🔲 Pending |
-| 24 | Group E2E + invite links | 55 hrs | Infra | 🔲 Pending |
-| 25 | WebRTC calling | 80 hrs | Infra | 🔲 Pending |
-| | **TOTAL** | **~315 hrs** | | **6/25 done** |
+| 7 | Single-session enforcement | 0.5 hrs | Pre-Launch | ✅ Done |
+| 8 | Block user / Clear chat | 3 hrs | Pre-Launch | ✅ Done |
+| 9 | NCMEC ESP registration | 2 hrs | Pre-Launch | 🔲 Pending (paperwork) |
+| 10 | Disappearing messages | 12 hrs | Revenue | 🔲 Pending |
+| 11 | Dockerfile + Docker Compose | 3 hrs | Infra | 🔲 Pending |
+| 12 | S3 media storage (presigned URLs) | 8 hrs | Infra | 🔲 Pending |
+| 13 | Paid storage + Stripe | 15 hrs | Revenue | 🔲 Pending |
+| 14 | Relay-only mode | 5 hrs | Revenue | 🔲 Pending |
+| 15 | Screenshot detection | 6 hrs | Revenue | 🔲 Pending |
+| 16 | Reputation/trust levels | 6 hrs | Revenue | 🔲 Pending |
+| 17 | Read receipts | 5 hrs | Engagement | 🔲 Pending |
+| 18 | Typing indicators | 3 hrs | Engagement | 🔲 Pending |
+| 19 | Message reactions | 6 hrs | Engagement | 🔲 Pending |
+| 20 | hCaptcha on registration | 4 hrs | Engagement | 🔲 Pending |
+| 21 | Message search | 8 hrs | Engagement | 🔲 Pending |
+| 22 | PWA + Push notifications | 10 hrs | Engagement | 🔲 Pending |
+| 23 | PostgreSQL migration | 10 hrs | Infra | 🔲 Pending |
+| 24 | Large file uploads (10 GB) | 25 hrs | Infra | 🔲 Pending |
+| 25 | Group E2E + invite links | 55 hrs | Infra | 🔲 Pending |
+| 26 | Burner rooms (no-account) | 18 hrs | Revenue | 🔲 Pending (needs #25 Group E2E) |
+| 27 | Multi-device support | 40 hrs | Infra | 🔲 Pending (needs #25 Group E2E) |
+| 28 | WebRTC calling | 80 hrs | Infra | 🔲 Pending |
+| | **TOTAL** | **~358.5 hrs** | | **8/28 done** |
 
 ---
 
@@ -963,13 +969,15 @@ Build these incrementally as your user base and revenue grow. Dockerfile is low-
   P5 Admin -------- ✅ DONE
   P6 IP Log ------- ✅ DONE
   P7 NCMEC -------- 🔲 (paperwork, not code)
+  P8 Single-session  ✅ DONE (nonce-based, invalidates old JWT on new login)
+  P9 Block/Clear --- ✅ DONE
                          |
   PHASE 2: REVENUE       |
   ====================   |
   R1 Disappearing  <-----+
-  R2 Burner rooms  <-----+
-       |        |
-       v        v
+  R2 Burner rooms  <-----+---> ⚠️ BLOCKED by I5 (Group E2E)
+       |
+       v
   R3 Stripe (paid tiers)
        |
        +---> R4 Relay-only mode
@@ -993,8 +1001,11 @@ Build these incrementally as your user base and revenue grow. Dockerfile is low-
         v
   I3 PostgreSQL migration  (when >500 concurrent users or multi-server)
   I4 Large uploads ---------(after I2 S3 + R3 Stripe)
-  I5 Group E2E + invite links (after user demand)
-  I6 WebRTC                (last -- highest effort, lowest ROI)
+  I5 Group E2E + invite links (unlocks R2 Burner rooms + I6 Multi-device)
+        |
+        +---> R2 Burner rooms
+        +---> I6 Multi-device support
+  I7 WebRTC                (last -- highest effort, lowest ROI)
 
   FUTURE CONSIDERATION:
   =====================
@@ -1014,6 +1025,8 @@ Build these incrementally as your user base and revenue grow. Dockerfile is low-
 | Media sharing (encrypted) | Yes | ✅ **Yes** | **Yes** |
 | Admin dashboard | No | ✅ **Yes** | **Yes** |
 | User reporting | Yes | ✅ **Yes** | **Yes** |
+| Block users / Clear chat | Yes | ✅ **Yes** | **Yes** |
+| Single-session enforcement | Yes | ✅ **Yes** | Multi-device later |
 | Anti-spam (no PII required) | Phone # = spam gate | ✅ PoW | PoW + reputation |
 | Self-hostable (easy) | No | ✅ **Yes** | **Yes** |
 | Web-only (no install) | No | ✅ **Yes** | **Yes** |

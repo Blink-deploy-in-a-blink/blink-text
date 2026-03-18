@@ -85,7 +85,7 @@ function formatFileSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled, replyTo, editingMsg, onCancelReply, onCancelEdit, peerDeleted }) {
+export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled, replyTo, editingMsg, onCancelReply, onCancelEdit, peerDeleted, keyReady }) {
   const [text, setText] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState(null);
@@ -300,8 +300,8 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
           <button
             style={s.iconBtn}
             onClick={() => fileInputRef.current?.click()}
-            disabled={disabled || sending}
-            title="Attach image or video"
+            disabled={disabled || sending || !keyReady}
+            title={!keyReady ? 'Waiting for encryption — media requires a secure connection' : 'Attach image or video'}
             onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
             onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-faint)')}
           ><PaperclipIcon /></button>
@@ -323,8 +323,8 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
           <button
             style={{ ...s.iconBtn }}
             onClick={startRecording}
-            disabled={disabled || sending}
-            title="Record voice note"
+            disabled={disabled || sending || !keyReady}
+            title={!keyReady ? 'Waiting for encryption — voice notes require a secure connection' : 'Record voice note'}
             onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
             onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-faint)')}
           ><MicIcon /></button>

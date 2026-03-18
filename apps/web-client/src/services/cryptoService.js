@@ -687,6 +687,9 @@ async function _deriveAndStore(conversationId, myPrivateKey, theirPublicKey) {
 
   // Reset send chain for this conversation (new root key = new chain)
   sendChains.delete(conversationId);
+
+  // Notify any waiting message queues that the key is now available
+  window.dispatchEvent(new CustomEvent('blink-key-ready', { detail: { conversationId } }));
 }
 
 // ---------------------------------------------------------------------------
