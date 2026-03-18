@@ -8,6 +8,9 @@ const { authenticateToken } = require('../auth');
 
 const router = express.Router();
 
+// Maximum number of conversations a single user can participate in (H-6)
+const MAX_CONVERSATIONS_PER_USER = 200;
+
 router.use(authenticateToken);
 
 // GET /api/conversations
@@ -57,6 +60,14 @@ router.post(
     }
 
     try {
+      // Enforce per-user conversation limit to prevent database exhaustion (H-6)
+      const convCount = db.prepare(
+        'SELECT COUNT(*) as count FROM conversation_participants WHERE user_id = ?'
+      ).get(req.user.id).count;
+      if (convCount >= MAX_CONVERSATIONS_PER_USER) {
+        return res.status(400).json({ error: 'Maximum conversation limit reached' });
+      }
+
       if (type === 'direct_message') {
         const [userA, userB] = allParticipants;
         const existing = db.prepare(`

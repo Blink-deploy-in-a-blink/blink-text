@@ -27,6 +27,14 @@ const authLimiter = rateLimit({
 const POW_DIFFICULTY = 18;
 const POW_CHALLENGE_TTL_MS = 5 * 60 * 1000; // challenges expire after 5 minutes
 
+// Reserved usernames that cannot be registered to prevent impersonation (H-5)
+const RESERVED_USERNAMES = new Set([
+  'admin', 'administrator', 'support', 'help', 'blink', 'system',
+  'moderator', 'mod', 'security', 'abuse', 'noreply', 'root',
+  'server', 'official', 'staff', 'team', 'bot', 'info', 'contact',
+  'deleted', 'deleted_user', 'announcement', 'channel', 'operator',
+]);
+
 // In-memory store of issued challenges. Each challenge can be used exactly once.
 // Map<challengeString, { createdAt: number }>
 const powChallenges = new Map();
@@ -97,6 +105,11 @@ router.post(
     }
 
     const { username, password, powChallenge, powNonce } = req.body;
+
+    // Block reserved usernames to prevent impersonation
+    if (RESERVED_USERNAMES.has(username.toLowerCase())) {
+      return res.status(400).json({ error: 'This username is reserved and cannot be registered' });
+    }
 
     // Verify PoW challenge exists and hasn't expired
     const challengeEntry = powChallenges.get(powChallenge);
@@ -237,9 +250,17 @@ router.put(
       if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
 
       const newHash = await bcrypt.hash(newPassword, 12);
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, req.user.id);
 
-      return res.json({ message: 'Password changed successfully' });
+      // Regenerate session nonce so that all existing sessions (including stolen
+      // tokens) are immediately invalidated after a password change.
+      const newNonce = crypto.randomBytes(16).toString('hex');
+
+      db.prepare('UPDATE users SET password_hash = ?, session_nonce = ? WHERE id = ?').run(newHash, newNonce, req.user.id);
+
+      // Issue a fresh token with the new nonce so the current session stays valid
+      const newToken = signToken({ id: req.user.id, username: user.username, nonce: newNonce });
+
+      return res.json({ message: 'Password changed successfully', token: newToken });
     } catch (err) {
       console.error('Change password error:', err);
       return res.status(500).json({ error: 'Internal server error' });

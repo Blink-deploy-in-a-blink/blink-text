@@ -11,6 +11,9 @@ const { authenticateToken } = require('../auth');
 const router = express.Router();
 router.use(authenticateToken);
 
+// Per-user storage limit (default 500 MB, configurable via env)
+const MAX_STORAGE_PER_USER = parseInt(process.env.MAX_STORAGE_PER_USER || String(500 * 1024 * 1024), 10);
+
 // Uploads directory — encrypted files only
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
@@ -54,6 +57,20 @@ router.post('/upload', upload.single('file'), (req, res) => {
     if (!participant) {
       fs.unlinkSync(req.file.path);
       return res.status(403).json({ error: 'Not a participant in this conversation' });
+    }
+
+    // Enforce per-user storage quota (C-4)
+    const totalStorage = db.prepare(
+      'SELECT COALESCE(SUM(file_size), 0) as total FROM media WHERE sender_id = ?'
+    ).get(req.user.id).total;
+
+    if (totalStorage + req.file.size > MAX_STORAGE_PER_USER) {
+      fs.unlinkSync(req.file.path);
+      return res.status(413).json({
+        error: 'Storage quota exceeded',
+        used: totalStorage,
+        limit: MAX_STORAGE_PER_USER,
+      });
     }
 
     const mediaId = uuidv4();
