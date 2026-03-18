@@ -12,7 +12,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // Per-user storage limit (default 500 MB, configurable via env)
-const MAX_STORAGE_PER_USER = parseInt(process.env.MAX_STORAGE_PER_USER || String(500 * 1024 * 1024), 10);
+const MAX_STORAGE_PER_USER = parseInt(process.env.MAX_STORAGE_PER_USER, 10) || (500 * 1024 * 1024);
 
 // Uploads directory — encrypted files only
 const UPLOADS_DIR = process.env.UPLOADS_DIR

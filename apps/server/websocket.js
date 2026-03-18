@@ -13,6 +13,9 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(__dirname, 'uploads');
 
+// Maximum ciphertext length in characters (base64-encoded ~48 KB plaintext)
+const MAX_CIPHERTEXT_LENGTH = 65536;
+
 // WebSocket rate limiting: max messages per window per user
 const WS_RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
 const WS_RATE_LIMIT_MAX = 30;           // max 30 messages per window
@@ -144,7 +147,7 @@ function registerSocketHandlers(io) {
       const { ciphertext, iv, version } = encPayload;
 
       // Validate payload size to prevent storage abuse (M-5)
-      if (typeof ciphertext !== 'string' || ciphertext.length > 65536) {
+      if (typeof ciphertext !== 'string' || ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
         if (typeof ack === 'function') ack({ error: 'Message payload too large' });
         return;
       }
@@ -263,7 +266,7 @@ function registerSocketHandlers(io) {
       }
 
       // Validate edit payload size (M-5)
-      if (encPayload.ciphertext && encPayload.ciphertext.length > 65536) {
+      if (encPayload.ciphertext && encPayload.ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
         if (typeof ack === 'function') ack({ error: 'Edit payload too large' });
         return;
       }
