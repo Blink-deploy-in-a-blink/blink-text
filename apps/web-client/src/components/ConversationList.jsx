@@ -2,73 +2,100 @@ import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { getConversations, changePassword, deleteAccount } from '../services/api.js';
 import { getSocket } from '../services/socket.js';
 
+/* ── tiny SVG icons ── */
+const ChatIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+);
+const SearchIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position:'absolute',left:'0.65rem',top:'50%',transform:'translateY(-50%)',color:'var(--text-faint)',pointerEvents:'none'}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+);
+const UserIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+);
+const TrashIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+);
+const ShieldIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+);
+const HelpIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+);
+const ChevronIcon = ({ up }) => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{transition:'transform 0.2s',transform:up?'rotate(180deg)':'rotate(0deg)'}}><polyline points="6 9 12 15 18 9"/></svg>
+);
+const AlertIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+);
+
 const s = {
   sidebar: {
-    width: '280px', borderRight: '1px solid #222', display: 'flex',
-    flexDirection: 'column', background: '#111', flexShrink: 0,
+    width: '300px', borderRight: '1px solid var(--border-default)', display: 'flex',
+    flexDirection: 'column', background: 'var(--bg-secondary)', flexShrink: 0,
     height: '100%', overflow: 'hidden',
   },
   header: {
-    padding: '1rem', borderBottom: '1px solid #222', display: 'flex',
+    padding: '0.85rem 1rem', borderBottom: '1px solid var(--border-default)', display: 'flex',
     alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
   },
-  title: { color: '#fff', fontWeight: 700, fontSize: '1.1rem' },
+  title: { color: 'var(--text-primary)', fontWeight: 700, fontSize: 'var(--text-lg)', display: 'flex', alignItems: 'center', gap: '0.45rem' },
   newBtn: {
-    background: '#6366f1', color: '#fff', border: 'none', borderRadius: '6px',
-    padding: '0.4rem 0.75rem', cursor: 'pointer', fontSize: '0.85rem',
+    background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)',
+    padding: '0.4rem 0.85rem', cursor: 'pointer', fontSize: 'var(--text-sm)', fontWeight: 600,
   },
-  list: { flex: 1, overflowY: 'auto', padding: '0.5rem 0' },
+  list: { flex: 1, overflowY: 'auto', padding: '0.25rem 0' },
   item: (active) => ({
-    padding: '0.75rem 1rem', cursor: 'pointer',
-    background: active ? '#1e1e3f' : 'transparent',
-    borderLeft: active ? '3px solid #6366f1' : '3px solid transparent',
+    padding: '0.7rem 1rem', cursor: 'pointer',
+    background: active ? 'var(--bg-active)' : 'transparent',
+    borderLeft: active ? '3px solid var(--accent)' : '3px solid transparent',
     transition: 'background 0.15s',
   }),
-  name: { color: '#e0e0e0', fontWeight: 500, fontSize: '0.95rem' },
-  sub: { color: '#666', fontSize: '0.75rem', marginTop: '0.2rem' },
-  empty: { color: '#555', textAlign: 'center', padding: '2rem 1rem', fontSize: '0.875rem' },
+  name: { color: 'var(--text-primary)', fontWeight: 500, fontSize: 'var(--text-md)' },
+  sub: { color: 'var(--text-faint)', fontSize: 'var(--text-xs)', marginTop: '0.15rem' },
+  empty: { color: 'var(--text-faint)', textAlign: 'center', padding: '2rem 1rem', fontSize: 'var(--text-sm)', lineHeight: 1.6 },
   footer: {
-    borderTop: '1px solid #222', padding: '0.5rem 0.75rem',
+    borderTop: '1px solid var(--border-default)', padding: '0.5rem 0.65rem',
     flexShrink: 0, overflowY: 'auto', maxHeight: '50%',
   },
   profileBtn: {
-    width: '100%', padding: '0.6rem 0.75rem', border: 'none', borderRadius: '6px',
-    background: 'transparent', color: '#e0e0e0', cursor: 'pointer',
-    fontSize: '0.9rem', fontWeight: 600, textAlign: 'left',
+    width: '100%', padding: '0.55rem 0.65rem', border: 'none', borderRadius: 'var(--radius-md)',
+    background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer',
+    fontSize: 'var(--text-sm)', fontWeight: 600, textAlign: 'left',
     display: 'flex', alignItems: 'center', gap: '0.5rem',
+    transition: 'background 0.15s',
   },
   profilePanel: {
-    padding: '0.5rem 0.75rem', background: '#1a1a1a', borderRadius: '8px',
+    padding: '0.65rem 0.75rem', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)',
     margin: '0.25rem 0',
   },
-  profileLabel: { color: '#888', fontSize: '0.75rem', marginBottom: '0.25rem' },
+  profileLabel: { color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginBottom: '0.35rem', fontWeight: 500 },
   profileInput: {
-    width: '100%', padding: '0.45rem 0.6rem', borderRadius: '6px',
-    border: '1px solid #333', background: '#0f0f0f', color: '#fff',
-    fontSize: '0.85rem', marginBottom: '0.5rem', outline: 'none',
+    width: '100%', padding: '0.45rem 0.6rem', borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-light)', background: 'var(--bg-primary)', color: 'var(--text-primary)',
+    fontSize: 'var(--text-sm)', marginBottom: '0.5rem',
   },
   profileSaveBtn: {
-    width: '100%', padding: '0.45rem', borderRadius: '6px', border: 'none',
-    background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: '0.8rem',
+    width: '100%', padding: '0.45rem', borderRadius: 'var(--radius-md)', border: 'none',
+    background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: 'var(--text-xs)',
     fontWeight: 600, marginBottom: '0.25rem',
   },
-  profileMsg: { fontSize: '0.75rem', textAlign: 'center', marginBottom: '0.25rem' },
+  profileMsg: { fontSize: 'var(--text-xs)', textAlign: 'center', marginBottom: '0.25rem' },
   logoutBtn: {
-    width: '100%', padding: '0.5rem', border: '1px solid #333', borderRadius: '6px',
-    background: 'transparent', color: '#888', cursor: 'pointer', fontSize: '0.85rem',
-    marginTop: '0.25rem',
-  },
-  searchInput: {
-    width: '100%', padding: '0.5rem 0.75rem', borderRadius: '8px',
-    border: '1px solid #222', background: '#0f0f0f', color: '#fff',
-    fontSize: '16px', outline: 'none', margin: '0.5rem 0',
+    width: '100%', padding: '0.5rem', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)',
+    background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-sm)',
+    marginTop: '0.25rem', fontWeight: 500, transition: 'background 0.15s, color 0.15s',
   },
   searchWrap: {
-    padding: '0 0.75rem', flexShrink: 0,
+    padding: '0 0.75rem', flexShrink: 0, position: 'relative',
+  },
+  searchInput: {
+    width: '100%', padding: '0.5rem 0.75rem 0.5rem 2rem', borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-primary)',
+    fontSize: '16px', margin: '0.5rem 0',
   },
 };
 
-const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser, isMobile, getUnreadCount, isAdmin, onOpenAdmin }, ref) {
+const ConversationList = forwardRef(function ConversationList({ activeConversationId, onSelect, onNewConversation, onLogout, currentUser, isMobile, getUnreadCount, isAdmin, onOpenAdmin, onShowHelp }, ref) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
@@ -177,14 +204,15 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
       ...(isMobile ? { width: '100%', borderRight: 'none' } : {}),
     }}>
       <div style={s.header}>
-        <span style={s.title}>💬 Conversations</span>
+        <span style={s.title}><ChatIcon /> Conversations</span>
         <button style={s.newBtn} onClick={onNewConversation}>+ New</button>
       </div>
       <div style={s.searchWrap}>
+        <SearchIcon />
         <input
           style={s.searchInput}
           type="text"
-          placeholder="🔍 Search conversations…"
+          placeholder="Search conversations…"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
@@ -212,8 +240,8 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
               <div style={s.name}>{getDisplayName(conv)}</div>
               {getUnreadCount && getUnreadCount(conv.id) > 0 && (
                 <span style={{
-                  background: '#6366f1', color: '#fff', borderRadius: '10px',
-                  fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.45rem',
+                  background: 'var(--accent)', color: '#fff', borderRadius: '10px',
+                  fontSize: 'var(--text-xs)', fontWeight: 700, padding: '0.1rem 0.45rem',
                   minWidth: '18px', textAlign: 'center', lineHeight: '1.3',
                 }}>
                   {getUnreadCount(conv.id) > 99 ? '99+' : getUnreadCount(conv.id)}
@@ -228,12 +256,12 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
         <button
           style={s.profileBtn}
           onClick={() => setShowProfile(!showProfile)}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#1a1a1a')}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-elevated)')}
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
-          <span style={{ fontSize: '1.1rem' }}>👤</span>
+          <UserIcon />
           <span>{username}</span>
-          <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#666' }}>{showProfile ? '▲' : '▼'}</span>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', display: 'flex' }}><ChevronIcon up={showProfile} /></span>
         </button>
 
         {showProfile && (
@@ -256,7 +284,7 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
               autoComplete="new-password"
             />
             {pwMsg && (
-              <p style={{ ...s.profileMsg, color: pwMsg.type === 'error' ? '#f87171' : '#4ade80' }}>
+              <p style={{ ...s.profileMsg, color: pwMsg.type === 'error' ? 'var(--danger-muted)' : '#4ade80' }}>
                 {pwMsg.text}
               </p>
             )}
@@ -264,18 +292,18 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
               {pwLoading ? 'Saving…' : 'Update Password'}
             </button>
 
-            <div style={{ borderTop: '1px solid #333', marginTop: '0.75rem', paddingTop: '0.75rem' }}>
+            <div style={{ borderTop: '1px solid var(--border-light)', marginTop: '0.75rem', paddingTop: '0.75rem' }}>
               {!showDeleteConfirm ? (
                 <button
-                  style={{ ...s.logoutBtn, color: '#f87171', borderColor: '#f8717133', marginTop: 0 }}
+                  style={{ ...s.logoutBtn, color: 'var(--danger-muted)', borderColor: 'rgba(248,113,113,0.2)', marginTop: 0 }}
                   onClick={() => setShowDeleteConfirm(true)}
                 >
-                  🗑 Delete Account
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}><TrashIcon /> Delete Account</span>
                 </button>
               ) : (
                 <>
-                  <div style={{ ...s.profileLabel, color: '#f87171', fontWeight: 600 }}>⚠️ Delete Account</div>
-                  <p style={{ color: '#888', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
+                  <div style={{ ...s.profileLabel, color: 'var(--danger-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}><AlertIcon /> Delete Account</div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginBottom: '0.5rem' }}>
                     This action cannot be undone.
                   </p>
                   <input
@@ -286,17 +314,17 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
                     onChange={(e) => setDeletePw(e.target.value)}
                     autoComplete="current-password"
                   />
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#aaa', fontSize: '0.8rem', marginBottom: '0.5rem', cursor: 'pointer' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginBottom: '0.5rem', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
                       checked={keepConvos}
                       onChange={(e) => setKeepConvos(e.target.checked)}
-                      style={{ accentColor: '#6366f1' }}
+                      style={{ accentColor: 'var(--accent)' }}
                     />
                     Keep my conversations for others
                   </label>
                   {deleteMsg && (
-                    <p style={{ ...s.profileMsg, color: '#f87171' }}>
+                    <p style={{ ...s.profileMsg, color: 'var(--danger-muted)' }}>
                       {deleteMsg.text}
                     </p>
                   )}
@@ -323,10 +351,16 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
 
         {isAdmin && (
           <button
-            style={{ ...s.logoutBtn, color: '#818cf8', borderColor: '#818cf833', marginBottom: '0.25rem' }}
+            style={{ ...s.logoutBtn, color: 'var(--accent-muted)', borderColor: 'rgba(129,140,248,0.2)', marginBottom: '0.25rem' }}
             onClick={onOpenAdmin}
           >
-            🛡️ Admin Dashboard
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}><ShieldIcon /> Admin Dashboard</span>
+          </button>
+        )}
+
+        {onShowHelp && (
+          <button style={{ ...s.logoutBtn, marginBottom: '0.25rem' }} onClick={onShowHelp}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}><HelpIcon /> Help &amp; How-to</span>
           </button>
         )}
 
@@ -339,30 +373,30 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
             display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
           }}>
             <div style={{
-              background: '#1a1a2e', borderRadius: '16px', padding: '2rem',
-              maxWidth: '420px', width: '90%', color: '#fff',
-              boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+              background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '2rem',
+              maxWidth: '420px', width: '90%', color: 'var(--text-primary)',
+              boxShadow: 'var(--shadow-lg)',
             }}>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 Sign out?
               </div>
-              <p style={{ color: '#ccc', fontSize: '0.9rem', lineHeight: 1.6, margin: '0 0 0.5rem' }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-md)', lineHeight: 1.6, margin: '0 0 0.5rem' }}>
                 You will be signed out of your account on this device.
               </p>
-              <p style={{ color: '#aaa', fontSize: '0.85rem', lineHeight: 1.6, margin: '0 0 1.25rem' }}>
+              <p style={{ color: 'var(--text-faint)', fontSize: 'var(--text-sm)', lineHeight: 1.6, margin: '0 0 1.25rem' }}>
                 Your encryption keys will be kept on this device so you can still read your messages when you log back in.
               </p>
               <div style={{
-                background: '#1a2a1a', border: '1px solid #4ade8033', borderRadius: '8px',
-                padding: '0.75rem', marginBottom: '1.25rem', fontSize: '0.8rem', color: '#4ade80', lineHeight: 1.5,
+                background: '#1a2a1a', border: '1px solid rgba(74,222,128,0.2)', borderRadius: 'var(--radius-md)',
+                padding: '0.75rem', marginBottom: '1.25rem', fontSize: 'var(--text-xs)', color: '#4ade80', lineHeight: 1.5,
               }}>
-                � Your message history will remain accessible on this device after re-login.
+                ✓ Your message history will remain accessible on this device after re-login.
               </div>
               <div style={{ display: 'flex', gap: '0.75rem' }}>
                 <button
                   style={{
-                    flex: 1, padding: '0.7rem', borderRadius: '8px', border: '1px solid #333',
-                    background: 'transparent', color: '#ccc', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
+                    flex: 1, padding: '0.7rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)',
+                    background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-md)', fontWeight: 600,
                   }}
                   onClick={() => setShowLogoutConfirm(false)}
                 >
@@ -370,8 +404,8 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
                 </button>
                 <button
                   style={{
-                    flex: 1, padding: '0.7rem', borderRadius: '8px', border: 'none',
-                    background: '#dc2626', color: '#fff', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
+                    flex: 1, padding: '0.7rem', borderRadius: 'var(--radius-md)', border: 'none',
+                    background: '#dc2626', color: '#fff', cursor: 'pointer', fontSize: 'var(--text-md)', fontWeight: 600,
                   }}
                   onClick={() => { setShowLogoutConfirm(false); onLogout(); }}
                 >

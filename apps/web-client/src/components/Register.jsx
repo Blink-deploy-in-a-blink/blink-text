@@ -3,45 +3,45 @@ import { useState } from 'react';
 const styles = {
   container: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: '100%', background: '#0f0f0f',
+    height: '100%', background: 'var(--bg-primary)',
   },
   card: {
-    background: '#1a1a1a', padding: '2rem', borderRadius: '12px',
-    width: '100%', maxWidth: '360px', margin: '0 1rem',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+    background: 'var(--bg-elevated)', padding: '2rem', borderRadius: 'var(--radius-lg)',
+    width: '100%', maxWidth: '380px', margin: '0 1rem',
+    boxShadow: 'var(--shadow-md)',
   },
-  title: { fontSize: '1.5rem', fontWeight: 700, marginBottom: '1.5rem', color: '#fff', textAlign: 'center' },
-  label: { display: 'block', marginBottom: '0.25rem', color: '#aaa', fontSize: '0.875rem' },
+  title: { fontSize: 'var(--text-2xl)', fontWeight: 700, marginBottom: '1.5rem', color: 'var(--text-primary)', textAlign: 'center', letterSpacing: '-0.02em' },
+  label: { display: 'block', marginBottom: '0.3rem', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', fontWeight: 500 },
   input: {
-    width: '100%', padding: '0.6rem 0.75rem', borderRadius: '8px',
-    border: '1px solid #333', background: '#0f0f0f', color: '#fff',
-    fontSize: '16px', marginBottom: '1rem', outline: 'none',
+    width: '100%', padding: '0.65rem 0.85rem', borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-light)', background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+    fontSize: '16px', marginBottom: '1rem',
   },
   btn: {
-    width: '100%', padding: '0.7rem', borderRadius: '8px', border: 'none',
-    background: '#6366f1', color: '#fff', fontSize: '1rem', cursor: 'pointer',
+    width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: 'none',
+    background: 'var(--accent)', color: '#fff', fontSize: 'var(--text-md)', cursor: 'pointer',
     fontWeight: 600, marginTop: '0.5rem',
   },
   btnDisabled: {
-    width: '100%', padding: '0.7rem', borderRadius: '8px', border: 'none',
-    background: '#4b4b6b', color: '#888', fontSize: '1rem', cursor: 'not-allowed',
+    width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: 'none',
+    background: '#4b4b6b', color: '#888', fontSize: 'var(--text-md)', cursor: 'not-allowed',
     fontWeight: 600, marginTop: '0.5rem',
   },
-  error: { color: '#f87171', marginBottom: '0.75rem', fontSize: '0.875rem', textAlign: 'center' },
-  link: { color: '#818cf8', cursor: 'pointer', textDecoration: 'underline' },
-  footer: { marginTop: '1rem', textAlign: 'center', color: '#666', fontSize: '0.85rem' },
-  hint: { color: '#555', fontSize: '0.75rem', marginTop: '-0.75rem', marginBottom: '1rem' },
+  error: { color: 'var(--danger-muted)', marginBottom: '0.75rem', fontSize: 'var(--text-sm)', textAlign: 'center' },
+  link: { color: 'var(--accent-muted)', cursor: 'pointer', textDecoration: 'underline' },
+  footer: { marginTop: '1rem', textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--text-sm)' },
+  hint: { color: 'var(--text-faint)', fontSize: 'var(--text-xs)', marginTop: '-0.75rem', marginBottom: '1rem' },
   tosRow: {
     display: 'flex', alignItems: 'flex-start', gap: '0.5rem',
     marginBottom: '1rem', marginTop: '0.25rem',
   },
   tosCheckbox: {
-    marginTop: '3px', accentColor: '#6366f1', width: '16px', height: '16px', flexShrink: 0,
+    marginTop: '3px', accentColor: 'var(--accent)', width: '16px', height: '16px', flexShrink: 0,
   },
-  tosLabel: { color: '#aaa', fontSize: '0.8rem', lineHeight: '1.4' },
-  tosLink: { color: '#818cf8', textDecoration: 'underline', cursor: 'pointer' },
+  tosLabel: { color: 'var(--text-muted)', fontSize: 'var(--text-sm)', lineHeight: '1.4' },
+  tosLink: { color: 'var(--accent-muted)', textDecoration: 'underline', cursor: 'pointer' },
   powStatus: {
-    textAlign: 'center', color: '#a5b4fc', fontSize: '0.8rem',
+    textAlign: 'center', color: 'var(--accent-muted)', fontSize: 'var(--text-sm)',
     marginTop: '0.5rem', minHeight: '1.2em',
   },
 };
@@ -92,7 +92,7 @@ export default function Register({ onRegister, onSwitchToLogin, onShowTerms, onS
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <h1 style={styles.title}>🔐 Create Account</h1>
+        <h1 style={styles.title}>Create Account</h1>
         <form onSubmit={handleSubmit}>
           {error && <p style={styles.error}>{error}</p>}
           <label style={styles.label}>Username</label>

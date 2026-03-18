@@ -1,74 +1,77 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
+/* ── Small SVG icons ── */
+const PaperclipIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>;
+const MicIcon = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>;
+const SendIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
+const CheckIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+const StopIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>;
+const VideoIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>;
+const ReplyIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>;
+const EditPenIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+
 const s = {
-  wrapper: { borderTop: '1px solid #222', background: '#111', flexShrink: 0 },
+  wrapper: { borderTop: '1px solid var(--border-default)', background: 'var(--bg-secondary)', flexShrink: 0 },
   replyBar: {
     display: 'flex', alignItems: 'center', gap: '0.5rem',
-    padding: '0.4rem 1rem', background: '#1a1a2e', borderBottom: '1px solid #222',
-    fontSize: '0.8rem', color: '#aaa',
+    padding: '0.4rem 1rem', background: 'var(--bg-active)', borderBottom: '1px solid var(--border-default)',
+    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
   },
   replyText: {
     flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   replyClose: {
-    background: 'transparent', border: 'none', color: '#888',
-    cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem',
+    background: 'transparent', border: 'none', color: 'var(--text-faint)',
+    cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem', transition: 'color 0.15s',
   },
   editBar: {
     display: 'flex', alignItems: 'center', gap: '0.5rem',
-    padding: '0.4rem 1rem', background: '#1e1a2e', borderBottom: '1px solid #222',
-    fontSize: '0.8rem', color: '#c4b5fd',
+    padding: '0.4rem 1rem', background: 'rgba(99,102,241,0.08)', borderBottom: '1px solid var(--border-default)',
+    fontSize: 'var(--text-sm)', color: 'var(--accent-muted)',
   },
   container: {
     padding: '0.75rem 1rem',
     display: 'flex', gap: '0.5rem', alignItems: 'flex-end',
   },
   textarea: {
-    flex: 1, resize: 'none', background: '#1a1a1a', color: '#fff',
-    border: '1px solid #333', borderRadius: '10px', padding: '0.6rem 0.85rem',
-    fontSize: '16px', outline: 'none', fontFamily: 'inherit', lineHeight: 1.5,
+    flex: 1, resize: 'none', background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+    border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)', padding: '0.6rem 0.85rem',
+    fontSize: '16px', fontFamily: 'inherit', lineHeight: 1.5,
     maxHeight: '120px', overflowY: 'auto',
   },
   btn: {
-    padding: '0.6rem 1.1rem', borderRadius: '10px', border: 'none',
-    background: '#6366f1', color: '#fff', fontSize: '1rem',
+    padding: '0.6rem 1.1rem', borderRadius: 'var(--radius-md)', border: 'none',
+    background: 'var(--accent)', color: '#fff', fontSize: '1rem',
     cursor: 'pointer', fontWeight: 600, flexShrink: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem',
   },
   iconBtn: {
-    padding: '0.6rem', borderRadius: '10px', border: 'none',
-    background: 'transparent', color: '#888', fontSize: '1.2rem',
+    padding: '0.6rem', borderRadius: 'var(--radius-md)', border: 'none',
+    background: 'transparent', color: 'var(--text-faint)', fontSize: '1.2rem',
     cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'center', transition: 'color 0.15s',
   },
   recordingBar: {
     display: 'flex', alignItems: 'center', gap: '0.5rem',
-    padding: '0.4rem 1rem', background: '#2a1a1a', borderBottom: '1px solid #333',
-    fontSize: '0.8rem', color: '#f87171',
+    padding: '0.4rem 1rem', background: 'rgba(248,113,113,0.08)', borderBottom: '1px solid var(--border-light)',
+    fontSize: 'var(--text-sm)', color: 'var(--danger-muted)',
   },
   recordDot: {
-    width: '8px', height: '8px', borderRadius: '50%', background: '#f87171',
+    width: '8px', height: '8px', borderRadius: '50%', background: 'var(--danger-muted)',
     animation: 'blink-dot 1s infinite',
   },
   previewBar: {
     display: 'flex', alignItems: 'center', gap: '0.5rem',
-    padding: '0.5rem 1rem', background: '#1a1a2e', borderBottom: '1px solid #222',
-    fontSize: '0.8rem', color: '#aaa',
+    padding: '0.5rem 1rem', background: 'var(--bg-active)', borderBottom: '1px solid var(--border-default)',
+    fontSize: 'var(--text-sm)', color: 'var(--text-muted)',
   },
   previewThumb: {
-    width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px',
+    width: '40px', height: '40px', objectFit: 'cover', borderRadius: 'var(--radius-sm)',
   },
   previewName: {
     flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
 };
-
-// Inject keyframe animation for recording indicator
-if (typeof document !== 'undefined' && !document.getElementById('blink-dot-keyframes')) {
-  const style = document.createElement('style');
-  style.id = 'blink-dot-keyframes';
-  style.textContent = '@keyframes blink-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }';
-  document.head.appendChild(style);
-}
 
 function formatDuration(seconds) {
   const m = Math.floor(seconds / 60);
@@ -258,14 +261,14 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
     <div style={s.wrapper}>
       {replyTo && !editingMsg && (
         <div style={s.replyBar}>
-          <span>↩</span>
+          <ReplyIcon />
           <span style={s.replyText}>{replyTo.plaintext}</span>
           <button style={s.replyClose} onClick={onCancelReply} title="Cancel reply">✕</button>
         </div>
       )}
       {editingMsg && (
         <div style={s.editBar}>
-          <span>✏️ Editing</span>
+          <span style={{display:'flex',alignItems:'center',gap:'0.35rem'}}><EditPenIcon /> Editing</span>
           <button style={s.replyClose} onClick={() => { onCancelEdit?.(); setText(''); }} title="Cancel edit">✕</button>
         </div>
       )}
@@ -274,13 +277,13 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
           <div style={s.recordDot} />
           <span>Recording… {formatDuration(recordingDuration)}</span>
           <div style={{ flex: 1 }} />
-          <button style={{ ...s.replyClose, color: '#f87171' }} onClick={cancelRecording} title="Cancel">✕</button>
+          <button style={{ ...s.replyClose, color: 'var(--danger-muted)' }} onClick={cancelRecording} title="Cancel">✕</button>
         </div>
       )}
       {selectedFile && !isRecording && (
         <div style={s.previewBar}>
           {filePreviewUrl && <img src={filePreviewUrl} alt="preview" style={s.previewThumb} />}
-          {!filePreviewUrl && selectedFile.type.startsWith('video/') && <span>🎬</span>}
+          {!filePreviewUrl && selectedFile.type.startsWith('video/') && <VideoIcon />}
           <span style={s.previewName}>{selectedFile.name} ({formatFileSize(selectedFile.size)})</span>
           <button style={s.replyClose} onClick={clearFileSelection} title="Remove">✕</button>
         </div>
@@ -299,9 +302,9 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled || sending}
             title="Attach image or video"
-            onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
-          >📎</button>
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-faint)')}
+          ><PaperclipIcon /></button>
         )}
         {!isRecording && (
           <textarea
@@ -318,22 +321,22 @@ export default function MessageInput({ onSend, onSendMedia, onSaveEdit, disabled
         {isRecording && <div style={{ flex: 1 }} />}
         {!editingMsg && !selectedFile && !text.trim() && !isRecording && (
           <button
-            style={{ ...s.iconBtn, fontSize: '1.3rem' }}
+            style={{ ...s.iconBtn }}
             onClick={startRecording}
             disabled={disabled || sending}
             title="Record voice note"
-            onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
-          >🎤</button>
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-faint)')}
+          ><MicIcon /></button>
         )}
         {isRecording && (
-          <button style={{ ...s.btn, background: '#f87171' }} onClick={stopRecording} title="Stop and send">
-            ⏹ Send
+          <button style={{ ...s.btn, background: 'var(--danger-muted)' }} onClick={stopRecording} title="Stop and send">
+            <StopIcon /> Send
           </button>
         )}
         {!isRecording && (text.trim() || selectedFile || editingMsg) && (
           <button style={s.btn} onClick={handleSend} disabled={disabled || sending || (!text.trim() && !selectedFile)}>
-            {sending ? '…' : editingMsg ? '✓' : '➤'}
+            {sending ? '…' : editingMsg ? <CheckIcon /> : <SendIcon />}
           </button>
         )}
       </div>

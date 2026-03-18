@@ -19,9 +19,11 @@ import ReportModal from './components/ReportModal.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
 import TermsOfService from './components/TermsOfService.jsx';
 import PrivacyPolicy from './components/PrivacyPolicy.jsx';
+import WelcomePage from './components/WelcomePage.jsx';
+import HelpPage from './components/HelpPage.jsx';
 
 const appStyles = {
-  app: { display: 'flex', height: '100%', overflow: 'hidden', background: '#0f0f0f' },
+  app: { display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' },
   main: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 },
 };
 
@@ -36,7 +38,7 @@ function useIsMobile() {
   return mobile;
 }
 
-function MessengerView({ user, logout }) {
+function MessengerView({ user, logout, onShowHelp }) {
   const isMobile = useIsMobile();
 
   const [activeConversation, setActiveConversation] = useState(() => {
@@ -289,6 +291,7 @@ function MessengerView({ user, logout }) {
               getUnreadCount={getUnreadCount}
               isAdmin={isAdmin}
               onOpenAdmin={() => setShowAdminPanel(true)}
+              onShowHelp={onShowHelp}
             />
           )}
           {showChat && (
@@ -358,17 +361,21 @@ function MessengerView({ user, logout }) {
 
 export default function App() {
   const { user, login, register, logout, ready, identityError, retryIdentity } = useAuth();
-  const [view, setView] = useState('login');
+  const [view, setView] = useState('welcome');
 
   if (!ready) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: '#0f0f0f', color: '#888' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: 'var(--bg-primary, #0a0a0a)', color: 'var(--text-muted, #888)' }}>
         Initializing…
       </div>
     );
   }
 
+  // Logged-in users go straight to the messenger (or help page if requested)
   if (user) {
+    if (view === 'help') {
+      return <HelpPage onBack={() => setView('messenger')} />;
+    }
     return (
       <>
         {identityError && (
@@ -376,7 +383,7 @@ export default function App() {
             position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
             background: '#d32f2f', color: '#fff', padding: '10px 16px',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            fontSize: '14px', fontFamily: 'sans-serif',
+            fontSize: '14px', fontFamily: 'inherit',
           }}>
             <span>⚠️ Encryption setup failed: {identityError}. Messages cannot be sent until this is resolved.</span>
             <button
@@ -391,9 +398,14 @@ export default function App() {
             </button>
           </div>
         )}
-        <MessengerView user={user} logout={logout} />
+        <MessengerView user={user} logout={logout} onShowHelp={() => setView('help')} />
       </>
     );
+  }
+
+  // Not logged in — show the appropriate view
+  if (view === 'help') {
+    return <HelpPage onBack={() => setView('welcome')} />;
   }
 
   if (view === 'terms') {
@@ -415,10 +427,23 @@ export default function App() {
     );
   }
 
+  if (view === 'login') {
+    return (
+      <Login
+        onLogin={login}
+        onSwitchToRegister={() => setView('register')}
+      />
+    );
+  }
+
+  // Default: welcome page
   return (
-    <Login
-      onLogin={login}
-      onSwitchToRegister={() => setView('register')}
+    <WelcomePage
+      onLogin={() => setView('login')}
+      onRegister={() => setView('register')}
+      onShowTerms={() => setView('terms')}
+      onShowPrivacy={() => setView('privacy')}
+      onShowHelp={() => setView('help')}
     />
   );
 }

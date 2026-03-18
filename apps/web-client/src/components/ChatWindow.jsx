@@ -6,16 +6,17 @@ import MediaPreviewModal from './MediaPreviewModal.jsx';
 const s = {
   window: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   header: {
-    padding: '1rem 1.5rem', borderBottom: '1px solid #222',
-    background: '#111', color: '#fff', fontWeight: 600, fontSize: '1rem',
+    padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--border-default)',
+    background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontWeight: 600, fontSize: 'var(--text-md)',
     display: 'flex', alignItems: 'center', flexShrink: 0,
   },
-  messages: { flex: 1, overflowY: 'auto', padding: '1rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: 0 },
-  empty: { color: '#555', textAlign: 'center', padding: '2rem', fontSize: '0.9rem' },
+  messages: { flex: 1, overflowY: 'auto', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: 0, position: 'relative' },
+  empty: { color: 'var(--text-faint)', textAlign: 'center', padding: '2rem', fontSize: 'var(--text-sm)' },
   loadMore: {
     alignSelf: 'center', padding: '0.4rem 1rem', borderRadius: '16px',
-    border: '1px solid #333', background: 'transparent', color: '#888',
-    cursor: 'pointer', fontSize: '0.8rem', marginBottom: '0.5rem', flexShrink: 0,
+    border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-muted)',
+    cursor: 'pointer', fontSize: 'var(--text-xs)', marginBottom: '0.5rem', flexShrink: 0,
+    transition: 'background 0.15s',
   },
   row: (mine) => ({
     display: 'flex', flexDirection: mine ? 'row-reverse' : 'row',
@@ -27,47 +28,50 @@ const s = {
     alignItems: mine ? 'flex-end' : 'flex-start',
   }),
   replyQuote: {
-    padding: '0.3rem 0.6rem', borderRadius: '8px 8px 0 0',
-    background: 'rgba(255,255,255,0.06)', borderLeft: '3px solid #6366f1',
-    fontSize: '0.75rem', color: '#aaa', maxWidth: '100%', marginBottom: '-2px',
+    padding: '0.3rem 0.6rem', borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
+    background: 'rgba(255,255,255,0.06)', borderLeft: '3px solid var(--accent)',
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)', maxWidth: '100%', marginBottom: '-2px',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   bubble: (mine) => ({
     padding: '0.6rem 1rem',
     borderRadius: mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-    background: mine ? '#6366f1' : '#1e1e2e', color: '#fff',
-    fontSize: '0.9rem', lineHeight: 1.5, wordBreak: 'break-word',
+    background: mine ? 'var(--accent)' : 'var(--bg-elevated)', color: 'var(--text-primary)',
+    fontSize: 'var(--text-md)', lineHeight: 1.5, wordBreak: 'break-word',
   }),
-  edited: { fontSize: '0.65rem', color: 'rgba(255,255,255,0.45)', marginLeft: '0.4rem', fontStyle: 'italic' },
+  edited: { fontSize: 'var(--text-xs)', color: 'rgba(255,255,255,0.45)', marginLeft: '0.4rem', fontStyle: 'italic' },
   meta: (mine) => ({
-    fontSize: '0.7rem', color: '#888',
+    fontSize: 'var(--text-xs)', color: 'var(--text-faint)',
     alignSelf: mine ? 'flex-end' : 'flex-start',
     marginTop: '0.1rem',
   }),
   dotsBtn: {
-    background: 'transparent', border: 'none', color: '#666',
+    background: 'transparent', border: 'none', color: 'var(--text-faint)',
     cursor: 'pointer', fontSize: '1rem', padding: '0.15rem 0.3rem',
-    borderRadius: '4px', lineHeight: 1, flexShrink: 0, alignSelf: 'center',
+    borderRadius: 'var(--radius-sm)', lineHeight: 1, flexShrink: 0, alignSelf: 'center',
+    transition: 'color 0.15s',
   },
   menu: {
-    position: 'fixed', background: '#1e1e2e', border: '1px solid #333',
-    borderRadius: '8px', padding: '0.25rem 0', zIndex: 200,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.6)', minWidth: '180px',
+    position: 'fixed', background: 'var(--bg-elevated)', border: '1px solid var(--border-light)',
+    borderRadius: 'var(--radius-md)', padding: '0.25rem 0', zIndex: 200,
+    boxShadow: 'var(--shadow-lg)', minWidth: '180px',
     maxHeight: 'calc(100vh - 16px)', overflowY: 'auto',
   },
   menuItem: {
-    padding: '0.5rem 1rem', color: '#e0e0e0', cursor: 'pointer',
-    fontSize: '0.85rem', display: 'block', width: '100%',
+    padding: '0.5rem 1rem', color: 'var(--text-primary)', cursor: 'pointer',
+    fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%',
     background: 'transparent', border: 'none', textAlign: 'left',
+    transition: 'background 0.1s',
   },
   menuItemDanger: {
-    padding: '0.5rem 1rem', color: '#f87171', cursor: 'pointer',
-    fontSize: '0.85rem', display: 'block', width: '100%',
+    padding: '0.5rem 1rem', color: 'var(--danger-muted)', cursor: 'pointer',
+    fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%',
     background: 'transparent', border: 'none', textAlign: 'left',
+    transition: 'background 0.1s',
   },
   mediaBubble: (mine) => ({
     borderRadius: mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-    background: mine ? '#6366f1' : '#1e1e2e', color: '#fff',
+    background: mine ? 'var(--accent)' : 'var(--bg-elevated)', color: 'var(--text-primary)',
     overflow: 'hidden', maxWidth: '300px',
   }),
   mediaImg: {
@@ -80,18 +84,37 @@ const s = {
   },
   downloadBtn: {
     display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-    padding: '0.3rem 0.6rem', fontSize: '0.75rem', color: '#aaa',
+    padding: '0.3rem 0.6rem', fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
     background: 'transparent', border: 'none', cursor: 'pointer',
     textDecoration: 'underline',
   },
   voiceBubble: (mine) => ({
     padding: '0.5rem 0.8rem',
     borderRadius: mine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-    background: mine ? '#6366f1' : '#1e1e2e', color: '#fff',
+    background: mine ? 'var(--accent)' : 'var(--bg-elevated)', color: 'var(--text-primary)',
     display: 'flex', flexDirection: 'column', gap: '0.3rem',
     minWidth: '200px',
   }),
+  scrollFab: {
+    position: 'sticky', bottom: '0.75rem', alignSelf: 'center',
+    width: '36px', height: '36px', borderRadius: '50%',
+    background: 'var(--bg-elevated)', border: '1px solid var(--border-light)',
+    color: 'var(--text-muted)', cursor: 'pointer', display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    boxShadow: 'var(--shadow-md)', transition: 'opacity 0.2s, transform 0.2s',
+    zIndex: 10,
+  },
 };
+
+/* ── Small SVG icons for context menu ── */
+const MReplyIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>;
+const MForwardIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>;
+const MEditIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+const MDownloadIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+const MFlagIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>;
+const MTrashIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
+const ChevronDownIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>;
+const BackIcon = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>;
 
 /** Parse media metadata from decrypted plaintext */
 function parseMediaMeta(plaintext) {
@@ -160,18 +183,19 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
   if (msg.messageType === 'voice') {
     return (
       <div style={s.voiceBubble(mine)}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}>
-          🎤 <span>Voice Note</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 'var(--text-sm)' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          <span>Voice Note</span>
         </div>
-        {loading && <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Loading…</span>}
-        {error && <span style={{ fontSize: '0.75rem', color: '#f87171' }}>{error}</span>}
+        {loading && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Loading…</span>}
+        {error && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--danger-muted)' }}>{error}</span>}
         {objectUrl && (
           <audio controls style={{ width: '100%', maxWidth: '250px', height: '36px' }} preload="auto">
             <source src={objectUrl} type={meta.mimeType || 'audio/webm'} />
           </audio>
         )}
         {objectUrl && (
-          <button style={s.downloadBtn} onClick={handleDownload}>⬇ Save</button>
+          <button style={s.downloadBtn} onClick={handleDownload}><MDownloadIcon /> Save</button>
         )}
       </div>
     );
@@ -182,12 +206,12 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
     return (
       <div style={s.mediaBubble(mine)}>
         {loading && (
-          <div style={{ padding: '2rem', textAlign: 'center', fontSize: '0.8rem', color: '#aaa' }}>
+          <div style={{ padding: '2rem', textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
             Loading image…
           </div>
         )}
         {error && (
-          <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.8rem', color: '#f87171' }}>
+          <div style={{ padding: '1rem', textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--danger-muted)' }}>
             {error}
           </div>
         )}
@@ -197,10 +221,10 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
             title="Click to preview" />
         )}
         <div style={{ padding: '0.3rem 0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.7rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {meta.fileName}
           </span>
-          {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}>⬇</button>}
+          {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}><MDownloadIcon /></button>}
         </div>
       </div>
     );
@@ -212,19 +236,19 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
       <div style={s.mediaBubble(mine)}>
         {!objectUrl && !loading && !error && (
           <button
-            style={{ padding: '2rem', width: '100%', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '0.85rem' }}
+            style={{ padding: '2rem', width: '100%', background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-sm)' }}
             onClick={loadMedia}
           >
             ▶ Load video ({meta.fileName})
           </button>
         )}
         {loading && (
-          <div style={{ padding: '2rem', textAlign: 'center', fontSize: '0.8rem', color: '#aaa' }}>
+          <div style={{ padding: '2rem', textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
             Loading video…
           </div>
         )}
         {error && (
-          <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.8rem', color: '#f87171' }}>
+          <div style={{ padding: '1rem', textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--danger-muted)' }}>
             {error}
           </div>
         )}
@@ -235,7 +259,7 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
           </video>
         )}
         <div style={{ padding: '0.3rem 0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.7rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {meta.fileName}
           </span>
           <div style={{ display: 'flex', gap: '0.3rem' }}>
@@ -243,7 +267,7 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
               onClick={() => onPreview?.({ objectUrl, mimeType: meta.mimeType || 'video/mp4', fileName: meta.fileName, messageType: 'video' })}>
               ⛶
             </button>}
-            {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}>⬇</button>}
+            {objectUrl && <button style={s.downloadBtn} onClick={handleDownload}><MDownloadIcon /></button>}
           </div>
         </div>
       </div>
@@ -260,6 +284,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const menuRef = useRef(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [previewMedia, setPreviewMedia] = useState(null); // { objectUrl, mimeType, fileName, messageType }
+  const [showScrollFab, setShowScrollFab] = useState(false);
   const longPressTimer = useRef(null);
   const isInitialLoad = useRef(true);
   const prevMessagesLen = useRef(0);
@@ -326,6 +351,22 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
     container.addEventListener('scroll', onScroll);
     return () => container.removeEventListener('scroll', onScroll);
   }, [hasMore, loadingMore, handleLoadMore]);
+
+  // Show/hide scroll-to-bottom FAB
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      setShowScrollFab(scrollHeight - scrollTop - clientHeight > 300);
+    };
+    container.addEventListener('scroll', onScroll);
+    return () => container.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
 
   // Close menu on click anywhere
   useEffect(() => {
@@ -411,13 +452,14 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
 
   if (!conversation) {
     return (
-      <div style={{ ...s.window, alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
-        <p style={{ color: '#888', fontSize: '1.1rem', fontWeight: 600 }}>💬 Welcome to Blink Text</p>
-        <p style={{ color: '#555', fontSize: '0.9rem' }}>Select a conversation or start a new one</p>
+      <div style={{ ...s.window, alignItems: 'center', justifyContent: 'center', gap: '1rem' }} className="fade-in">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.6 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-lg)', fontWeight: 600 }}>Welcome to Blink Text</p>
+        <p style={{ color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }}>Select a conversation or start a new one</p>
         <button
           style={{
-            padding: '0.6rem 1.5rem', borderRadius: '8px', border: 'none',
-            background: '#6366f1', color: '#fff', fontSize: '0.95rem',
+            padding: '0.6rem 1.5rem', borderRadius: 'var(--radius-md)', border: 'none',
+            background: 'var(--accent)', color: '#fff', fontSize: 'var(--text-md)',
             cursor: 'pointer', fontWeight: 600,
           }}
           onClick={onNewConversation}
@@ -440,12 +482,12 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
           <button
             onClick={onBack}
             style={{
-              background: 'transparent', border: 'none', color: '#ccc',
-              fontSize: '1.4rem', cursor: 'pointer', padding: '0.2rem 0.6rem 0.2rem 0',
-              lineHeight: 1, flexShrink: 0,
+              background: 'transparent', border: 'none', color: 'var(--text-muted)',
+              cursor: 'pointer', padding: '0.2rem 0.6rem 0.2rem 0',
+              lineHeight: 1, flexShrink: 0, display: 'flex', alignItems: 'center',
             }}
             title="Back to conversations"
-          >☰</button>
+          ><BackIcon /></button>
         )}
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {conversation.displayName || 'Conversation'}
@@ -453,10 +495,12 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
       </div>
       {!!conversation.has_deleted_participant && (
         <div style={{
-          padding: '0.5rem 1.5rem', background: '#2a1a1a', borderBottom: '1px solid #333',
-          color: '#f87171', fontSize: '0.8rem', textAlign: 'center', flexShrink: 0,
+          padding: '0.5rem 1.25rem', background: 'rgba(248,113,113,0.08)', borderBottom: '1px solid var(--border-light)',
+          color: 'var(--danger-muted)', fontSize: 'var(--text-xs)', textAlign: 'center', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem',
         }}>
-          ⚠️ This user has deleted their account. You can no longer send messages.
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          This user has deleted their account. You can no longer send messages.
         </div>
       )}
       <div style={s.messages} ref={messagesContainerRef}>
@@ -496,21 +540,21 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 <button
                   style={s.dotsBtn}
                   onClick={(e) => openMenu(e, msg)}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = '#666')}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-faint)')}
                   title="Options"
                 >⋮</button>
               )}
 
               <div style={s.bubbleCol(mine)}>
                 {replyText && (
-                  <div style={s.replyQuote}>↩ {replyText}</div>
+                  <div style={s.replyQuote}><span style={{display:'inline-flex',alignItems:'center',gap:'0.25rem'}}><MReplyIcon /> {replyText}</span></div>
                 )}
                 {(msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'voice') && msg.mediaId ? (
                   <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} onPreview={setPreviewMedia} />
                 ) : (
                   <div style={msg.plaintext === '[unable to decrypt]'
-                    ? { ...s.bubble(mine), background: '#1a1a2e', border: '1px dashed #333', fontStyle: 'italic', color: '#666', fontSize: '0.82rem' }
+                    ? { ...s.bubble(mine), background: 'var(--bg-elevated)', border: '1px dashed var(--border-light)', fontStyle: 'italic', color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }
                     : s.bubble(mine)
                   }>
                     {msg.plaintext === '[unable to decrypt]'
@@ -525,58 +569,63 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
           );
         })}
         <div ref={bottomRef} />
+        {showScrollFab && (
+          <button style={s.scrollFab} onClick={scrollToBottom} title="Scroll to bottom">
+            <ChevronDownIcon />
+          </button>
+        )}
       </div>
 
       {menu && (
         <div ref={menuRef} style={{ ...s.menu, left: menu.x, top: menu.y }}>
           <button style={s.menuItem}
-            onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
-            onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             onClick={() => handleAction('reply')}>
-            ↩ Reply
+            <MReplyIcon /> Reply
           </button>
           <button style={s.menuItem}
-            onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
-            onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             onClick={() => handleAction('forward')}>
-            ➡ Forward
+            <MForwardIcon /> Forward
           </button>
           {menu.msg.senderId === myUserId && menu.msg.messageType !== 'image' && menu.msg.messageType !== 'video' && menu.msg.messageType !== 'voice' && (
             <button style={s.menuItem}
-              onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
-              onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               onClick={() => handleAction('edit')}>
-              ✏️ Edit
+              <MEditIcon /> Edit
             </button>
           )}
           {(menu.msg.messageType === 'image' || menu.msg.messageType === 'video' || menu.msg.messageType === 'voice') && menu.msg.mediaId && (
             <button style={s.menuItem}
-              onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
-              onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               onClick={() => handleAction('download')}>
-              ⬇ Download
+              <MDownloadIcon /> Download
             </button>
           )}
           {menu.msg.senderId !== myUserId && (
             <button style={s.menuItem}
-              onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
-              onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               onClick={() => handleAction('report')}>
-              🚩 Report
+              <MFlagIcon /> Report
             </button>
           )}
           <button style={s.menuItem}
-            onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
-            onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             onClick={() => handleAction('delete_me')}>
-            🗑 Delete for me
+            <MTrashIcon /> Delete for me
           </button>
           {menu.msg.senderId === myUserId && (
             <button style={s.menuItemDanger}
-              onMouseEnter={(e) => (e.target.style.background = '#2a2a3e')}
-              onMouseLeave={(e) => (e.target.style.background = 'transparent')}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               onClick={() => handleAction('delete_all')}>
-              🗑 Delete for everyone
+              <MTrashIcon /> Delete for everyone
             </button>
           )}
         </div>
