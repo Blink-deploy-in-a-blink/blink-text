@@ -122,6 +122,8 @@ app.use((err, _req, res, _next) => {
 });
 
 const io = new Server(httpServer, {
+  // Limit WebSocket message size to prevent memory exhaustion (H-9)
+  maxHttpBufferSize: 64 * 1024, // 64 KB max per WebSocket message
   cors: {
     origin: (origin, cb) => {
       if (isAllowedOrigin(origin)) return cb(null, true);

@@ -3,13 +3,15 @@
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
 
-if (!process.env.JWT_SECRET) {
-  console.warn(
-    '[auth] WARNING: JWT_SECRET is not set. Using an insecure default. ' +
-    'Set the JWT_SECRET environment variable before deploying.'
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error(
+    '[FATAL] JWT_SECRET environment variable must be set and at least 32 characters long.\n' +
+    'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64\'))"\n' +
+    'Then set it in your .env file: JWT_SECRET=<generated_value>'
   );
+  process.exit(1);
 }
 
 /**

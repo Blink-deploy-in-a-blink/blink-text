@@ -8,10 +8,13 @@ const path = require('path');
 const db = require('./db');
 const { validateEncryptedMessage, validateKeyExchange } = require('@blink-text/shared');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(__dirname, 'uploads');
+
+// Maximum ciphertext length in characters (base64-encoded ~48 KB plaintext)
+const MAX_CIPHERTEXT_LENGTH = 65536;
 
 // WebSocket rate limiting: max messages per window per user
 const WS_RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
@@ -143,6 +146,12 @@ function registerSocketHandlers(io) {
       const { conversationId, payload: encPayload } = payload;
       const { ciphertext, iv, version } = encPayload;
 
+      // Validate payload size to prevent storage abuse (M-5)
+      if (typeof ciphertext !== 'string' || ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
+        if (typeof ack === 'function') ack({ error: 'Message payload too large' });
+        return;
+      }
+
       const participant = db.prepare(
         'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
       ).get(conversationId, userId);
@@ -153,7 +162,8 @@ function registerSocketHandlers(io) {
       }
 
       try {
-        const messageId = payload.id || uuidv4();
+        // Always generate message IDs server-side to prevent ID collision (M-4)
+        const messageId = uuidv4();
         const timestamp = Date.now();
         const replyToId = (msg && msg.replyToId) || null;
         const messageType = (msg && msg.messageType) || 'text';
@@ -252,6 +262,12 @@ function registerSocketHandlers(io) {
 
       if (!conversationId || !messageId || !encPayload) {
         if (typeof ack === 'function') ack({ error: 'Missing fields' });
+        return;
+      }
+
+      // Validate edit payload size (M-5)
+      if (encPayload.ciphertext && encPayload.ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
+        if (typeof ack === 'function') ack({ error: 'Edit payload too large' });
         return;
       }
 

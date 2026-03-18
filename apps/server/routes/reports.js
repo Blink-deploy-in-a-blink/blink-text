@@ -3,6 +3,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
+const rateLimit = require('express-rate-limit');
 const db = require('../db');
 const { authenticateToken } = require('../auth');
 
@@ -10,10 +11,20 @@ const router = express.Router();
 
 const VALID_REASONS = ['spam', 'harassment', 'illegal_content', 'impersonation', 'other'];
 
+// Rate limit on report submissions to prevent report flooding (H-4)
+const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many reports submitted. Please try again later.' },
+});
+
 // POST /api/reports — submit a report against a user/message
 router.post(
   '/',
   authenticateToken,
+  reportLimiter,
   [
     body('reportedUserId').isString().trim().notEmpty().withMessage('Reported user ID is required'),
     body('reason').isString().isIn(VALID_REASONS).withMessage(`Reason must be one of: ${VALID_REASONS.join(', ')}`),
@@ -38,6 +49,14 @@ router.post(
     const reportedUser = db.prepare('SELECT id FROM users WHERE id = ? AND deleted_at IS NULL').get(reportedUserId);
     if (!reportedUser) {
       return res.status(404).json({ error: 'Reported user not found' });
+    }
+
+    // Prevent duplicate pending reports against the same user from the same reporter
+    const existingReport = db.prepare(
+      'SELECT 1 FROM reports WHERE reporter_id = ? AND reported_user_id = ? AND status = ?'
+    ).get(req.user.id, reportedUserId, 'pending');
+    if (existingReport) {
+      return res.status(409).json({ error: 'You already have a pending report against this user' });
     }
 
     // If conversationId provided, verify reporter is a participant
