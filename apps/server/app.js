@@ -50,7 +50,10 @@ function isAllowedOrigin(origin) {
   return false;
 }
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginOpenerPolicy: false,
+  originAgentCluster: false,
+}));
 app.use(cors({
   origin: (origin, cb) => {
     if (isAllowedOrigin(origin)) return cb(null, true);
