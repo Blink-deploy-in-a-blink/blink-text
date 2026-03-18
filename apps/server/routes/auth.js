@@ -11,6 +11,18 @@ const { signToken, authenticateToken } = require('../auth');
 
 const router = express.Router();
 
+// Account lockout settings
+const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_SECONDS = 15 * 60; // 15 minutes
+
+// Reserved usernames to prevent impersonation / social engineering
+const RESERVED_USERNAMES = new Set([
+  'admin', 'administrator', 'support', 'help', 'blink', 'system',
+  'moderator', 'mod', 'security', 'abuse', 'noreply', 'root',
+  'server', 'official', 'staff', 'team', 'bot', 'info', 'contact',
+  'deleted', 'deleted_user', 'announcement', 'channel',
+]);
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 20,
@@ -117,9 +129,14 @@ router.post(
     }
 
     try {
+      // Block reserved usernames (case-insensitive)
+      if (RESERVED_USERNAMES.has(username.toLowerCase())) {
+        return res.status(400).json({ error: 'Registration failed. Try a different username.' });
+      }
+
       const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
       if (existing) {
-        return res.status(409).json({ error: 'Username already taken' });
+        return res.status(400).json({ error: 'Registration failed. Try a different username.' });
       }
 
       const password_hash = await bcrypt.hash(password, 12);
@@ -176,10 +193,32 @@ router.post(
         return res.status(403).json({ error: 'This account has been suspended' });
       }
 
+      // Account lockout: reject if too many failed attempts
+      const now = Math.floor(Date.now() / 1000);
+      if (user.locked_until && now < user.locked_until) {
+        const remainingMin = Math.ceil((user.locked_until - now) / 60);
+        return res.status(429).json({ error: `Account temporarily locked. Try again in ${remainingMin} minute(s).` });
+      }
+
+      // If lock has expired, reset failed attempts
+      if (user.locked_until && now >= user.locked_until) {
+        db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id);
+      }
+
       const valid = await bcrypt.compare(password, user.password_hash);
       if (!valid) {
+        const attempts = (user.failed_login_attempts || 0) + 1;
+        if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
+          const lockUntil = now + LOCKOUT_DURATION_SECONDS;
+          db.prepare('UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?').run(attempts, lockUntil, user.id);
+          return res.status(429).json({ error: 'Too many failed attempts. Account locked for 15 minutes.' });
+        }
+        db.prepare('UPDATE users SET failed_login_attempts = ? WHERE id = ?').run(attempts, user.id);
         return res.status(401).json({ error: 'Invalid credentials' });
       }
+
+      // Successful login — reset failed attempts
+      db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id);
 
       // Generate a fresh session nonce — invalidates any previous session immediately.
       // The old JWT will fail nonce checks on the next API call or WebSocket event.
@@ -239,7 +278,12 @@ router.put(
       const newHash = await bcrypt.hash(newPassword, 12);
       db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, req.user.id);
 
-      return res.json({ message: 'Password changed successfully' });
+      // Regenerate session nonce so all existing tokens (including stolen ones) are invalidated
+      const newNonce = crypto.randomBytes(16).toString('hex');
+      db.prepare('UPDATE users SET session_nonce = ? WHERE id = ?').run(newNonce, req.user.id);
+
+      const newToken = signToken({ id: req.user.id, username: user.username, nonce: newNonce });
+      return res.json({ message: 'Password changed successfully', token: newToken });
     } catch (err) {
       console.error('Change password error:', err);
       return res.status(500).json({ error: 'Internal server error' });

@@ -123,6 +123,14 @@ if (!userColumns.includes('session_nonce')) {
   db.exec("ALTER TABLE users ADD COLUMN session_nonce TEXT DEFAULT NULL");
 }
 
+// Account lockout: track failed login attempts per user
+if (!userColumns.includes('failed_login_attempts')) {
+  db.exec("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0");
+}
+if (!userColumns.includes('locked_until')) {
+  db.exec("ALTER TABLE users ADD COLUMN locked_until INTEGER DEFAULT NULL");
+}
+
 // Reports table for user reporting mechanism
 db.exec(`
   CREATE TABLE IF NOT EXISTS reports (

@@ -8,7 +8,7 @@ const path = require('path');
 const db = require('./db');
 const { validateEncryptedMessage, validateKeyExchange } = require('@blink-text/shared');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+const JWT_SECRET = process.env.JWT_SECRET; // validated at startup by auth.js
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(__dirname, 'uploads');
@@ -16,6 +16,9 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR
 // WebSocket rate limiting: max messages per window per user
 const WS_RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
 const WS_RATE_LIMIT_MAX = 30;           // max 30 messages per window
+
+// Max ciphertext length (~24 KB of plaintext after base64 encoding)
+const MAX_CIPHERTEXT_LENGTH = 32768;
 
 /**
  * Simple in-memory rate limiter for WebSocket events.
@@ -143,6 +146,12 @@ function registerSocketHandlers(io) {
       const { conversationId, payload: encPayload } = payload;
       const { ciphertext, iv, version } = encPayload;
 
+      // Reject oversized ciphertext to prevent database bloat
+      if (typeof ciphertext !== 'string' || ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
+        if (typeof ack === 'function') ack({ error: 'Message payload too large' });
+        return;
+      }
+
       const participant = db.prepare(
         'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
       ).get(conversationId, userId);
@@ -153,7 +162,7 @@ function registerSocketHandlers(io) {
       }
 
       try {
-        const messageId = payload.id || uuidv4();
+        const messageId = uuidv4(); // Always server-generated — never trust client-provided IDs
         const timestamp = Date.now();
         const replyToId = (msg && msg.replyToId) || null;
         const messageType = (msg && msg.messageType) || 'text';
@@ -252,6 +261,12 @@ function registerSocketHandlers(io) {
 
       if (!conversationId || !messageId || !encPayload) {
         if (typeof ack === 'function') ack({ error: 'Missing fields' });
+        return;
+      }
+
+      // Reject oversized ciphertext on edits (same limit as send)
+      if (encPayload.ciphertext && (typeof encPayload.ciphertext !== 'string' || encPayload.ciphertext.length > MAX_CIPHERTEXT_LENGTH)) {
+        if (typeof ack === 'function') ack({ error: 'Edited message payload too large' });
         return;
       }
 

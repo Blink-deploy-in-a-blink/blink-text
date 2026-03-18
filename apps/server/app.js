@@ -28,9 +28,10 @@ app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const PORT = parseInt(process.env.PORT || '3001', 10);
+const ALLOW_LAN = process.env.ALLOW_LAN === 'true';
 
 // ------------------------------------------------------------------
-// CORS: accept Cloudflare domain, CLIENT_ORIGIN, and LAN IPs
+// CORS: accept CLIENT_ORIGIN, localhost, and optionally LAN IPs
 // ------------------------------------------------------------------
 function isAllowedOrigin(origin) {
   if (!origin) return true; // curl, mobile apps, same-origin
@@ -40,9 +41,11 @@ function isAllowedOrigin(origin) {
     const ip = url.hostname;
     // localhost / loopback
     if (ip === 'localhost' || ip === '127.0.0.1') return true;
-    // Private LAN ranges
-    if (ip.startsWith('192.168.') || ip.startsWith('10.') ||
-        /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+    // Private LAN ranges — only when explicitly enabled
+    if (ALLOW_LAN) {
+      if (ip.startsWith('192.168.') || ip.startsWith('10.') ||
+          /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+    }
     // If CLIENT_ORIGIN is a domain (e.g. https://blink.example.com),
     // also allow that exact domain
     const clientHost = new URL(CLIENT_ORIGIN).hostname;
@@ -122,6 +125,7 @@ app.use((err, _req, res, _next) => {
 });
 
 const io = new Server(httpServer, {
+  maxHttpBufferSize: 64 * 1024, // 64 KB max per WebSocket message (prevents payload-based DoS)
   cors: {
     origin: (origin, cb) => {
       if (isAllowedOrigin(origin)) return cb(null, true);

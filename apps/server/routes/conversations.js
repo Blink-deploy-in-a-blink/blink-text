@@ -8,6 +8,8 @@ const { authenticateToken } = require('../auth');
 
 const router = express.Router();
 
+const MAX_CONVERSATIONS_PER_USER = parseInt(process.env.MAX_CONVERSATIONS_PER_USER || '500', 10);
+
 router.use(authenticateToken);
 
 // GET /api/conversations
@@ -97,6 +99,14 @@ router.post(
         if (blocked) {
           return res.status(403).json({ error: 'Cannot create conversation — one of you has blocked the other' });
         }
+      }
+
+      // Enforce per-user conversation limit to prevent database exhaustion
+      const convCount = db.prepare(
+        'SELECT COUNT(*) as count FROM conversation_participants WHERE user_id = ?'
+      ).get(req.user.id).count;
+      if (convCount >= MAX_CONVERSATIONS_PER_USER) {
+        return res.status(400).json({ error: 'Maximum conversation limit reached. Remove some conversations first.' });
       }
 
       const conversationId = uuidv4();

@@ -238,7 +238,11 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
     if (newPw.length < 8) { setPwMsg({ type: 'error', text: 'New password must be at least 8 characters' }); return; }
     setPwLoading(true);
     try {
-      await changePassword(currentPw, newPw);
+      const result = await changePassword(currentPw, newPw);
+      // Server regenerates session nonce on password change — save the fresh token
+      if (result?.token) {
+        localStorage.setItem('token', result.token);
+      }
       setPwMsg({ type: 'success', text: 'Password changed!' });
       setCurrentPw('');
       setNewPw('');

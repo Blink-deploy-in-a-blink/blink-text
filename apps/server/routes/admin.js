@@ -96,6 +96,8 @@ router.get('/users', authenticateToken, requireAdmin, (req, res) => {
       is_admin: !!u.is_admin,
       is_banned: !!u.is_banned,
       report_count: u.report_count,
+      // Mask registration IPs by default — show only first two octets for privacy
+      registration_ip: u.registration_ip ? u.registration_ip.replace(/(\d+\.\d+)\.\d+\.\d+/, '$1.x.x') : null,
     }));
 
     return res.json({ users: usersWithReports, total, page, limit });
