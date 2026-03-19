@@ -175,6 +175,62 @@ input, textarea, select {
 .animate-slideInLeft { animation: slideInLeft 0.25s ease; }
 .animate-pulse      { animation: pulse 1.5s infinite; }
 
+/* ─── Nuke Chat animation ────────────────────────────────────────── */
+@keyframes nuke-flash {
+  0%   { opacity: 0; }
+  10%  { opacity: 1; }
+  40%  { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+
+@keyframes nuke-ring {
+  0%   { transform: translate(-50%, -50%) scale(0); opacity: 0.7; }
+  60%  { opacity: 0.3; }
+  100% { transform: translate(-50%, -50%) scale(3); opacity: 0; }
+}
+
+@keyframes nuke-ring-2 {
+  0%   { transform: translate(-50%, -50%) scale(0); opacity: 0.5; }
+  100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+}
+
+.nuke-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.nuke-flash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(239, 68, 68, 0.25) 0%, rgba(239, 68, 68, 0.08) 40%, transparent 70%);
+  animation: nuke-flash 1s ease-out forwards;
+}
+
+.nuke-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid rgba(239, 68, 68, 0.4);
+  animation: nuke-ring 0.8s ease-out forwards;
+}
+
+.nuke-ring-2 {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  animation: nuke-ring-2 0.6s 0.1s ease-out forwards;
+}
+
 /* ─── Modal overlay ──────────────────────────────────────────────── */
 .modal-overlay {
   animation: fadeIn 0.15s ease;

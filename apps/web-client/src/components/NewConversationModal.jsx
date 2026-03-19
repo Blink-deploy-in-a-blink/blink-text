@@ -39,10 +39,20 @@ const s = {
   },
 };
 
+const TIMER_OPTIONS = [
+  { value: '', label: 'Off' },
+  { value: '300000', label: '5 minutes' },
+  { value: '3600000', label: '1 hour' },
+  { value: '86400000', label: '24 hours' },
+  { value: '604800000', label: '7 days' },
+  { value: '2592000000', label: '30 days' },
+];
+
 export default function NewConversationModal({ currentUser, onClose, onCreated }) {
   const [type, setType] = useState('direct_message');
   const [recipientUsername, setRecipientUsername] = useState('');
   const [groupName, setGroupName] = useState('');
+  const [disappearAfter, setDisappearAfter] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -50,6 +60,7 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
   const handleCreate = async () => {
     setError('');
     setLoading(true);
+    const timerValue = disappearAfter ? parseInt(disappearAfter, 10) : null;
     try {
       if (!recipientUsername.trim()) {
         setError('Please enter a username');
@@ -79,7 +90,7 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
           participantIds.add(matched.id);
         }
         const participants = Array.from(participantIds);
-        const conv = await createConversation(type, participants, groupName || undefined);
+        const conv = await createConversation(type, participants, groupName || undefined, timerValue);
         onCreated(conv);
         onClose();
       } else {
@@ -94,7 +105,7 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
           return;
         }
         const participants = [matchedUser.id];
-        const conv = await createConversation(type, participants, groupName || undefined);
+        const conv = await createConversation(type, participants, groupName || undefined, timerValue);
         onCreated(conv);
         onClose();
       }
@@ -139,6 +150,17 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
           value={recipientUsername}
           onChange={(e) => setRecipientUsername(e.target.value)}
         />
+
+        <label style={s.label}>Auto-delete Timer</label>
+        <select
+          style={s.select}
+          value={disappearAfter}
+          onChange={(e) => setDisappearAfter(e.target.value)}
+        >
+          {TIMER_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
 
         {error && <p style={s.error}>{error}</p>}
 

@@ -55,6 +55,66 @@ function createWsRateLimiter() {
 function registerSocketHandlers(io) {
   const wsRateCheck = createWsRateLimiter();
 
+  // ── Disappearing messages: cleanup interval (every 30s) ──
+  // Deletes expired messages + associated media files from disk, then notifies clients.
+  const expiryCleanupInterval = setInterval(() => {
+    try {
+      const now = Date.now();
+      // Find expired messages grouped by conversation
+      const expired = db.prepare(
+        'SELECT id, conversation_id, media_id FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?'
+      ).all(now);
+
+      if (expired.length === 0) return;
+
+      // Group by conversation for batched socket events
+      const byConversation = {};
+      for (const msg of expired) {
+        if (!byConversation[msg.conversation_id]) byConversation[msg.conversation_id] = [];
+        byConversation[msg.conversation_id].push(msg);
+      }
+
+      // Delete media files from disk + DB, then delete messages
+      const deleteMedia = db.prepare('DELETE FROM media WHERE id = ?');
+      const deleteMessage = db.prepare('DELETE FROM messages WHERE id = ?');
+      const deleteMessageDeletions = db.prepare('DELETE FROM message_deletions WHERE message_id = ?');
+
+      const cleanupTransaction = db.transaction(() => {
+        for (const msg of expired) {
+          // Clean up media file if present
+          if (msg.media_id) {
+            try {
+              const media = db.prepare('SELECT file_path FROM media WHERE id = ?').get(msg.media_id);
+              if (media) {
+                const filePath = path.join(UPLOADS_DIR, media.file_path);
+                try { fs.unlinkSync(filePath); } catch (_e) { /* best-effort */ }
+                deleteMedia.run(msg.media_id);
+              }
+            } catch (_e) { /* continue cleanup */ }
+          }
+          deleteMessageDeletions.run(msg.id);
+          deleteMessage.run(msg.id);
+        }
+      });
+      cleanupTransaction();
+
+      // Notify connected clients per conversation
+      for (const [conversationId, msgs] of Object.entries(byConversation)) {
+        io.to(conversationId).emit('messages_expired', {
+          conversationId,
+          messageIds: msgs.map(m => m.id),
+        });
+      }
+
+      if (expired.length > 0) {
+        console.log(`[expiry] Cleaned up ${expired.length} expired message(s)`);
+      }
+    } catch (err) {
+      console.error('[expiry] Cleanup error:', err);
+    }
+  }, 30_000); // every 30 seconds
+  expiryCleanupInterval.unref();
+
   io.use((socket, next) => {
     const token = socket.handshake.auth && socket.handshake.auth.token;
     if (!token) return next(new Error('Authentication token required'));
@@ -194,9 +254,13 @@ function registerSocketHandlers(io) {
           }
         }
 
+        // Look up conversation's disappearing message timer
+        const conv = db.prepare('SELECT disappear_after FROM conversations WHERE id = ?').get(conversationId);
+        const expiresAt = (conv && conv.disappear_after) ? timestamp + conv.disappear_after : null;
+
         db.prepare(
-          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp, message_type, media_id, chain_idx) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp, messageType, mediaId, chainIdx);
+          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp, message_type, media_id, chain_idx, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp, messageType, mediaId, chainIdx, expiresAt);
 
         const message = {
           id: messageId,
@@ -208,6 +272,7 @@ function registerSocketHandlers(io) {
           payload: { ciphertext, iv, version: version || 'v1', chainIdx },
           messageType,
           mediaId,
+          expiresAt,
         };
 
         io.to(conversationId).emit('message', message);

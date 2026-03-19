@@ -3,8 +3,14 @@
 const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 const db = require('../db');
 const { authenticateToken } = require('../auth');
+
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.join(__dirname, '..', 'uploads');
 
 const router = express.Router();
 
@@ -21,7 +27,7 @@ router.get('/', (req, res) => {
     // First, get all conversation IDs the current user is part of
     // Then, for each conversation, get participant info
     const conversations = db.prepare(`
-      SELECT c.id, c.type, c.name, c.created_at,
+      SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
              GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
              GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
              MAX(CASE WHEN u.deleted_at IS NOT NULL AND u.id != ? THEN 1 ELSE 0 END) AS has_deleted_participant
@@ -49,12 +55,13 @@ router.post(
     body('type').isIn(['direct_message', 'group_chat']).withMessage('type must be direct_message or group_chat'),
     body('participants').isArray({ min: 1 }).withMessage('participants must be a non-empty array of user IDs'),
     body('name').optional().isString().trim().isLength({ max: 64 }),
+    body('disappearAfter').optional({ nullable: true }).isInt({ min: 0 }).withMessage('disappearAfter must be a non-negative integer (ms)'),
   ],
   (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { type, participants, name } = req.body;
+    const { type, participants, name, disappearAfter } = req.body;
     const allParticipants = Array.from(new Set([req.user.id, ...participants]));
 
     if (type === 'direct_message' && allParticipants.length !== 2) {
@@ -75,7 +82,7 @@ router.post(
           // Return enriched conversation data (not just {id}) so the client
           // gets participant_usernames, participant_ids, etc.
           const enriched = db.prepare(`
-            SELECT c.id, c.type, c.name, c.created_at,
+            SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
                    GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
                    GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
                    MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
@@ -113,8 +120,11 @@ router.post(
       }
 
       const conversationId = uuidv4();
+      // Validate disappearAfter: only allow known timer values (null, 0, or positive integers)
+      const validTimers = [null, 0, 300000, 3600000, 86400000, 604800000, 2592000000]; // off, 5m, 1h, 24h, 7d, 30d
+      const timerValue = (disappearAfter != null && validTimers.includes(disappearAfter)) ? disappearAfter : null;
       const createConversation = db.transaction(() => {
-        db.prepare('INSERT INTO conversations (id, type, name) VALUES (?, ?, ?)').run(conversationId, type, name || null);
+        db.prepare('INSERT INTO conversations (id, type, name, disappear_after) VALUES (?, ?, ?, ?)').run(conversationId, type, name || null, timerValue || null);
         for (const uid of allParticipants) {
           db.prepare('INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)').run(conversationId, uid);
         }
@@ -125,7 +135,7 @@ router.post(
 
       // Fetch enriched conversation data including participant usernames (Issue 4.3)
       const enrichedConversation = db.prepare(`
-        SELECT c.id, c.type, c.name, c.created_at,
+        SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
                GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
                GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
                MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
@@ -172,7 +182,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     if (before) {
       // Load older messages before the cursor timestamp
       rows = db.prepare(`
-        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx, expires_at
         FROM messages
         WHERE conversation_id = ?
           AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
@@ -185,7 +195,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
     } else {
       // Load the latest messages
       rows = db.prepare(`
-        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx, expires_at
         FROM messages
         WHERE conversation_id = ?
           AND id NOT IN (SELECT message_id FROM message_deletions WHERE user_id = ?)
@@ -214,6 +224,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
         payload,
         messageType: row.message_type || 'text',
         mediaId: row.media_id || null,
+        expiresAt: row.expires_at || null,
       };
     });
 
@@ -321,6 +332,21 @@ router.delete(
         if (message.sender_id !== req.user.id) {
           return res.status(403).json({ error: 'You can only delete your own messages for everyone' });
         }
+
+        // Clean up associated media file from disk and DB if present
+        if (message.media_id) {
+          try {
+            const media = db.prepare('SELECT file_path FROM media WHERE id = ?').get(message.media_id);
+            if (media) {
+              const filePath = path.join(UPLOADS_DIR, media.file_path);
+              try { fs.unlinkSync(filePath); } catch (_e) { /* best-effort */ }
+              db.prepare('DELETE FROM media WHERE id = ?').run(message.media_id);
+            }
+          } catch (mediaErr) {
+            console.error('Failed to clean up media on REST delete:', mediaErr);
+          }
+        }
+
         db.prepare('DELETE FROM messages WHERE id = ?').run(req.params.messageId);
       } else {
         db.prepare(
@@ -366,6 +392,149 @@ router.delete('/:id/clear', [param('id').isUUID()], (req, res) => {
     return res.json({ cleared: true, count: allMessages.length });
   } catch (err) {
     console.error('Clear chat error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT /api/conversations/:id/disappear — update disappearing message timer
+router.put(
+  '/:id/disappear',
+  [
+    param('id').isUUID(),
+    body('disappearAfter')
+      .optional({ nullable: true })
+      .custom((value) => {
+        // Allow null (turn off) or specific timer durations
+        if (value === null) return true;
+        const validTimers = [0, 300000, 3600000, 86400000, 604800000, 2592000000]; // 5m, 1h, 24h, 7d, 30d
+        if (!validTimers.includes(value)) throw new Error('Invalid timer duration');
+        return true;
+      }),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, req.user.id);
+      if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
+
+      const conversation = db.prepare('SELECT id FROM conversations WHERE id = ?').get(req.params.id);
+      if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+      const { disappearAfter } = req.body;
+      const timerValue = (disappearAfter != null && disappearAfter > 0) ? disappearAfter : null;
+
+      db.prepare('UPDATE conversations SET disappear_after = ? WHERE id = ?').run(timerValue, req.params.id);
+
+      // Format a human-readable label for the timer
+      const timerLabels = {
+        300000: '5 minutes',
+        3600000: '1 hour',
+        86400000: '24 hours',
+        604800000: '7 days',
+        2592000000: '30 days',
+      };
+      const timerLabel = timerValue ? (timerLabels[timerValue] || `${timerValue}ms`) : null;
+
+      // Look up the changer's username for the system message
+      const changer = db.prepare('SELECT username FROM users WHERE id = ?').get(req.user.id);
+      const changerName = changer ? changer.username : 'Someone';
+      const systemMessage = timerValue
+        ? `${changerName} set messages to disappear after ${timerLabel}`
+        : `${changerName} turned off disappearing messages`;
+
+      // Notify all participants in real-time
+      const io = req.app.get('io');
+      if (io) {
+        io.to(req.params.id).emit('conversation_timer_changed', {
+          conversationId: req.params.id,
+          disappearAfter: timerValue,
+          changedBy: req.user.id,
+          systemMessage,
+        });
+      }
+
+      return res.json({
+        updated: true,
+        disappearAfter: timerValue,
+        systemMessage,
+      });
+    } catch (err) {
+      console.error('Update disappear timer error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// DELETE /api/conversations/:id/nuke — permanently delete ALL messages + media for both participants
+router.delete('/:id/nuke', [param('id').isUUID()], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+  try {
+    const participant = db.prepare(
+      'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+    ).get(req.params.id, req.user.id);
+    if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
+
+    // Find all messages and their media in this conversation
+    const messages = db.prepare(
+      'SELECT id, media_id FROM messages WHERE conversation_id = ?'
+    ).all(req.params.id);
+
+    // Collect media IDs for cleanup
+    const mediaIds = messages.filter(m => m.media_id).map(m => m.media_id);
+    const messageIds = messages.map(m => m.id);
+
+    const nukeTransaction = db.transaction(() => {
+      // 1. Delete media files from disk and DB
+      for (const mediaId of mediaIds) {
+        try {
+          const media = db.prepare('SELECT file_path FROM media WHERE id = ?').get(mediaId);
+          if (media) {
+            const filePath = path.join(UPLOADS_DIR, media.file_path);
+            try { fs.unlinkSync(filePath); } catch (_e) { /* best-effort */ }
+            db.prepare('DELETE FROM media WHERE id = ?').run(mediaId);
+          }
+        } catch (_e) { /* continue cleanup */ }
+      }
+
+      // 2. Delete all message_deletions for these messages
+      if (messageIds.length > 0) {
+        const placeholders = messageIds.map(() => '?').join(',');
+        db.prepare(`DELETE FROM message_deletions WHERE message_id IN (${placeholders})`).run(...messageIds);
+      }
+
+      // 3. Delete all messages in the conversation
+      db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(req.params.id);
+    });
+    nukeTransaction();
+
+    // Look up the nuker's username for the system message
+    const nuker = db.prepare('SELECT username FROM users WHERE id = ?').get(req.user.id);
+    const nukerName = nuker ? nuker.username : 'Someone';
+
+    // Notify all participants in real-time
+    const io = req.app.get('io');
+    if (io) {
+      io.to(req.params.id).emit('conversation_nuked', {
+        conversationId: req.params.id,
+        nukedBy: req.user.id,
+        nukedByName: nukerName,
+        messageCount: messages.length,
+      });
+    }
+
+    return res.json({
+      nuked: true,
+      messagesDeleted: messages.length,
+      mediaDeleted: mediaIds.length,
+    });
+  } catch (err) {
+    console.error('Nuke chat error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

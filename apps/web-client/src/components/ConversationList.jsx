@@ -1,5 +1,5 @@
 import { useState, useEffect, useImperativeHandle, forwardRef, useRef, useCallback } from 'react';
-import { getConversations, changePassword, deleteAccount, blockUser, unblockUser, getBlocks, checkBlocked, clearChat, submitReport } from '../services/api.js';
+import { getConversations, changePassword, deleteAccount, blockUser, unblockUser, getBlocks, checkBlocked, clearChat, nukeChat, submitReport } from '../services/api.js';
 import { getSocket, connectSocket } from '../services/socket.js';
 
 /* ── tiny SVG icons ── */
@@ -338,6 +338,18 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
           onSelect(confirmAction.conv); // triggers message reload
         }
         setTimeout(() => { setConfirmAction(null); }, 1200);
+      } else if (confirmAction.type === 'nuke') {
+        // Close modal immediately so the nuke animation is visible on the chat area
+        const convToNuke = confirmAction.conv;
+        setConfirmAction(null);
+        setActionLoading(false);
+        try {
+          await nukeChat(convToNuke.id);
+        } catch (nukeErr) {
+          console.error('Nuke chat failed:', nukeErr);
+        }
+        // The conversation_nuked socket event handles animation + clearing messages
+        return;
       } else if (confirmAction.type === 'report') {
         if (!confirmAction.peerId) throw new Error('Cannot determine user to report');
         await submitReport(confirmAction.peerId, reportReason, {
@@ -407,6 +419,11 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ ...s.name, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                 {getDisplayName(conv)}
+                {conv.disappear_after && (
+                  <span title="Auto-delete enabled" style={{ display: 'inline-flex', color: 'var(--accent)', flexShrink: 0, opacity: 0.7 }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  </span>
+                )}
                 {conv.type === 'direct_message' && (() => {
                   const peer = getPeerInfo(conv);
                   return peer && blockedIds.has(peer.id) ? (
@@ -704,6 +721,12 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
             onClick={() => handleCtxAction('clear')}>
             <EraserIcon /> Clear Chat
           </button>
+          <button style={s.ctxItemDanger}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            onClick={() => handleCtxAction('nuke')}>
+            <TrashIcon /> Nuke Chat
+          </button>
           {ctxMenu.conv.type === 'direct_message' && (
             <button style={s.ctxItem}
               onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
@@ -776,6 +799,28 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
                     onClick={() => setConfirmAction(null)} disabled={actionLoading}>Cancel</button>
                   <button style={{ flex: 1, padding: '0.65rem', borderRadius: 'var(--radius-md)', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: 'var(--text-sm)', fontWeight: 600 }}
                     onClick={executeAction} disabled={actionLoading}>{actionLoading ? 'Clearing…' : 'Clear Chat'}</button>
+                </div>
+              </>
+            )}
+
+            {/* Nuke chat confirmation */}
+            {confirmAction.type === 'nuke' && (
+              <>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--danger-muted)' }}>
+                  <TrashIcon /> Nuke chat with {confirmAction.peerName}?
+                </div>
+                <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', lineHeight: 1.6, margin: '0 0 0.5rem' }}>
+                  This will <strong>permanently delete all messages and media</strong> from the server for <strong>both participants</strong>.
+                </p>
+                <p style={{ color: 'var(--danger-muted)', fontSize: 'var(--text-xs)', lineHeight: 1.5, margin: '0 0 1rem', fontWeight: 600 }}>
+                  This action is irreversible. Neither you nor {confirmAction.peerName} will be able to recover these messages.
+                </p>
+                {actionMsg && <p style={{ fontSize: 'var(--text-sm)', color: actionMsg.type === 'error' ? 'var(--danger-muted)' : '#4ade80', textAlign: 'center', marginBottom: '0.75rem' }}>{actionMsg.text}</p>}
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <button style={{ flex: 1, padding: '0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-sm)', fontWeight: 600 }}
+                    onClick={() => setConfirmAction(null)} disabled={actionLoading}>Cancel</button>
+                  <button style={{ flex: 1, padding: '0.65rem', borderRadius: 'var(--radius-md)', border: 'none', background: '#dc2626', color: '#fff', cursor: 'pointer', fontSize: 'var(--text-sm)', fontWeight: 600 }}
+                    onClick={executeAction} disabled={actionLoading}>{actionLoading ? 'Nuking…' : 'Nuke Chat'}</button>
                 </div>
               </>
             )}

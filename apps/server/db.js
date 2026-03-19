@@ -115,6 +115,17 @@ if (!messageColumns.includes('chain_idx')) {
   db.exec("ALTER TABLE messages ADD COLUMN chain_idx INTEGER DEFAULT NULL");
 }
 
+// Disappearing messages: per-message expiry timestamp (ms)
+if (!messageColumns.includes('expires_at')) {
+  db.exec("ALTER TABLE messages ADD COLUMN expires_at INTEGER DEFAULT NULL");
+}
+
+// Disappearing messages: per-conversation default timer (ms duration), NULL = off
+const convColumns = db.prepare("PRAGMA table_info(conversations)").all().map(c => c.name);
+if (!convColumns.includes('disappear_after')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN disappear_after INTEGER DEFAULT NULL");
+}
+
 // Session nonce for single-session enforcement.
 // Each login generates a fresh nonce stored in the DB and embedded in the JWT.
 // Every authenticated request checks that the JWT's nonce matches the DB.
@@ -167,6 +178,7 @@ db.exec(`
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_media_sender_id ON media(sender_id);
   CREATE INDEX IF NOT EXISTS idx_reports_reporter_created ON reports(reporter_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_messages_expires ON messages(expires_at) WHERE expires_at IS NOT NULL;
 `);
 
 // Enforce at most one pending report per (reporter, reported_user) pair at the DB level
