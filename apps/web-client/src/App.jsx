@@ -3,7 +3,7 @@ import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
 import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
 import { getSocket, joinConversation } from './services/socket.js';
-import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey, getConversationRootKey } from './services/cryptoService.js';
+import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
 import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
 import { verifyAdmin } from './services/api.js';
@@ -175,11 +175,23 @@ function MessengerView({ user, logout, onShowHelp }) {
       if (!conversation?.id) return;
       // Join the socket room immediately so we receive messages and key_exchange events
       joinConversation(conversation.id);
-      // Initiate key exchange (fire-and-forget, 0 retries)
-      try {
-        await setupConversationKey(conversation.id, user.id, { maxRetries: 0, retryDelay: 0 });
-      } catch (err) {
-        console.warn('[global] Failed to preload new conversation key:', conversation.id, err.message);
+
+      if (conversation.type === 'group_chat') {
+        // Group: register and set up sender keys
+        registerGroupConversation(conversation.id);
+        try {
+          const participantIds = (conversation.participant_ids || '').split(',').filter(Boolean);
+          await setupGroupKeys(conversation.id, user.id, participantIds, { emitSenderKeyDistributed });
+        } catch (err) {
+          console.warn('[global] Failed to setup group keys for new conversation:', conversation.id, err.message);
+        }
+      } else {
+        // DM: Initiate key exchange (fire-and-forget, 0 retries)
+        try {
+          await setupConversationKey(conversation.id, user.id, { maxRetries: 0, retryDelay: 0 });
+        } catch (err) {
+          console.warn('[global] Failed to preload new conversation key:', conversation.id, err.message);
+        }
       }
     };
 
@@ -255,8 +267,6 @@ function MessengerView({ user, logout, onShowHelp }) {
         }
         const participantIds = (conv.participant_ids || '').split(',').filter(Boolean);
         await setupGroupKeys(conv.id, user.id, participantIds, {
-          setupConversationKey,
-          getConversationRootKey,
           emitSenderKeyDistributed,
         });
       } catch (err) {

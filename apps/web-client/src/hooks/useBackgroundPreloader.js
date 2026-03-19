@@ -1,12 +1,18 @@
 import { useEffect, useRef } from 'react';
 import { getConversations, getMessages } from '../services/api.js';
-import { joinConversation } from '../services/socket.js';
+import { joinConversation, emitSenderKeyDistributed } from '../services/socket.js';
 import {
   setupConversationKey,
   decryptConversationMessage,
   hasConversationKey,
 } from '../services/cryptoService.js';
 import { getCachedMessages, setCachedMessages } from '../services/messageCache.js';
+import {
+  isGroupConversation,
+  registerGroupConversation,
+  setupGroupKeys,
+  hasGroupKeys,
+} from '../services/groupCrypto.js';
 
 /**
  * Background preloader — after login, iterates all conversations and
@@ -50,12 +56,23 @@ async function preloadConversation(conv, userId) {
     // Join the socket room
     joinConversation(conv.id);
 
-    // Set up key with 0 retries — instant, no blocking
-    // If peer hasn't published yet, key will arrive via socket later
-    await setupConversationKey(conv.id, userId, { maxRetries: 0, retryDelay: 0 });
+    const isGroup = conv.type === 'group_chat';
 
-    // Only fetch & decrypt messages if we actually have a key
-    if (!hasConversationKey(conv.id)) return;
+    if (isGroup) {
+      // Register and set up group sender keys
+      if (!isGroupConversation(conv.id)) registerGroupConversation(conv.id);
+      const participantIds = (conv.participant_ids || '').split(',').filter(Boolean);
+      try {
+        await setupGroupKeys(conv.id, userId, participantIds, { emitSenderKeyDistributed });
+      } catch (err) {
+        console.warn('[preloader] Group key setup failed:', conv.id, err.message);
+      }
+      if (!hasGroupKeys(conv.id)) return;
+    } else {
+      // DM: Set up key with 0 retries — instant, no blocking
+      await setupConversationKey(conv.id, userId, { maxRetries: 0, retryDelay: 0 });
+      if (!hasConversationKey(conv.id)) return;
+    }
 
     const { messages: rawMessages, hasMore } = await getMessages(conv.id, { limit: 50 });
 

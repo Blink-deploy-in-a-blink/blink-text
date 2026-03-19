@@ -306,7 +306,7 @@ router.post(
     body('name').optional().isString().trim().isLength({ max: 64 }),
     body('disappearAfter').optional({ nullable: true }).isInt({ min: 0 }).withMessage('disappearAfter must be a non-negative integer (ms)'),
     // Group/room-specific fields
-    body('maxParticipants').optional().isInt({ min: 2, max: 50 }).withMessage('maxParticipants must be 2-50'),
+    body('maxParticipants').optional().isInt({ min: 2, max: 200 }).withMessage('maxParticipants must be 2-200'),
     body('expiresIn').optional({ nullable: true }).isInt({ min: 0 }).withMessage('expiresIn must be a non-negative integer (ms)'),
     body('inviteEnabled').optional().isBoolean(),
     body('allowGuests').optional().isBoolean(),

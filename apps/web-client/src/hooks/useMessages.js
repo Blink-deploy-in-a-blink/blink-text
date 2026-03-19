@@ -8,7 +8,6 @@ import {
   encryptMediaForConversation,
   decryptConversationMessage,
   hasConversationKey,
-  getConversationRootKey,
 } from '../services/cryptoService.js';
 import {
   isGroupConversation,
@@ -96,17 +95,24 @@ export function useMessages(conversationId, myUserId) {
         // Join the socket room first so we receive key_exchange events during setup
         joinConversation(conversationId);
 
-        // Set up key — uses 3 retries by default (max ~1.2s wait)
-        await setupConversationKey(conversationId, myUserId);
+        if (isGroupConversation(conversationId)) {
+          // Group conversations: check if we have sender keys (set up by App.jsx handleSelectConversation)
+          // If not ready yet, just mark key as ready (group setup happens asynchronously)
+          const groupReady = hasGroupKeys(conversationId);
+          if (isMounted.current && !cancelled) setKeyReady(groupReady || true); // allow loading messages even if keys pending
+        } else {
+          // DM conversations: set up ECDH key exchange
+          await setupConversationKey(conversationId, myUserId);
 
-        // Update keyReady state
-        const keyAvailable = hasConversationKey(conversationId);
-        if (isMounted.current && !cancelled) setKeyReady(keyAvailable);
+          // Update keyReady state
+          const keyAvailable = hasConversationKey(conversationId);
+          if (isMounted.current && !cancelled) setKeyReady(keyAvailable);
 
-        // If we still don't have a key (peer hasn't published yet), show cached or empty
-        if (!keyAvailable) {
-          if (isMounted.current && !cancelled) setLoading(false);
-          return;
+          // If we still don't have a key (peer hasn't published yet), show cached or empty
+          if (!keyAvailable) {
+            if (isMounted.current && !cancelled) setLoading(false);
+            return;
+          }
         }
 
         const { messages: rawMessages, hasMore: more } = await getMessages(conversationId, { limit: 50 });
@@ -333,8 +339,6 @@ export function useMessages(conversationId, myUserId) {
 
     // ── Group sender key socket events ──
     const groupCryptoDeps = {
-      setupConversationKey,
-      getConversationRootKey,
       emitSenderKeyDistributed,
       getMyUserId: () => myUserId,
     };
@@ -396,6 +400,10 @@ export function useMessages(conversationId, myUserId) {
   // Returns true if key is available, false if not (message will be queued).
   const tryEnsureKey = useCallback(async () => {
     if (!conversationId) return false;
+    // Group conversations use sender keys, not DM key exchange
+    if (isGroupConversation(conversationId)) {
+      return hasGroupKeys(conversationId);
+    }
     if (hasConversationKey(conversationId)) return true;
     await setupConversationKey(conversationId, myUserId, { maxRetries: 6, retryDelay: 500 });
     if (hasConversationKey(conversationId)) return true;
@@ -413,7 +421,9 @@ export function useMessages(conversationId, myUserId) {
     if (!conversationId) return;
 
     const id = uuidv4();
-    const keyAvailable = hasConversationKey(conversationId);
+    const keyAvailable = isGroupConversation(conversationId)
+      ? hasGroupKeys(conversationId)
+      : hasConversationKey(conversationId);
 
     if (!keyAvailable) {
       // Queue the message in memory — it will be flushed when the key arrives
@@ -536,7 +546,7 @@ export function useMessages(conversationId, myUserId) {
 
   const editMsg = useCallback(async (messageId, newPlaintext) => {
     if (!conversationId) return;
-    if (!hasConversationKey(conversationId)) {
+    if (!isGroupConversation(conversationId) && !hasConversationKey(conversationId)) {
       await setupConversationKey(conversationId, myUserId);
     }
     const payload = await encryptForConversation(conversationId, newPlaintext);

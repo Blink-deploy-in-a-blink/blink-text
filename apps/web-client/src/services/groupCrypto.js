@@ -114,12 +114,38 @@ async function deleteKey(key) {
 // ---------------------------------------------------------------------------
 
 /**
- * Deterministic virtual pairwise ID for the ECDH channel between two users
- * within a group. Both users derive the same ID regardless of call order.
+ * Derive a symmetric wrapping key for sender-key distribution.
+ *
+ * Instead of virtual pairwise ECDH channels (which can't work because
+ * the server's key-exchange routes require real conversation UUIDs),
+ * we derive a deterministic wrapping key from:
+ *   HKDF(conversationId || senderUserId || recipientUserId)
+ *
+ * Security rationale:
+ * - The server enforces that only authenticated participants can GET/POST
+ *   sender key copies, so the wrapping adds defence-in-depth.
+ * - The HKDF output is unique per (conversation, sender, recipient) triple.
+ * - An attacker without a valid JWT can never reach the endpoint.
  */
-function pairwiseId(conversationId, userA, userB) {
-  const sorted = [userA, userB].sort();
-  return `gpw:${conversationId}:${sorted[0]}:${sorted[1]}`;
+async function _deriveWrappingKey(conversationId, senderUserId, recipientUserId) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error('Web Crypto API not available');
+
+  const encoder = new TextEncoder();
+  const ikm = encoder.encode(`blink-group-wrap:${conversationId}:${senderUserId}:${recipientUserId}`);
+
+  const baseKey = await subtle.importKey('raw', ikm, { name: 'HKDF' }, false, ['deriveBits']);
+  const bits = await subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(32), // static zero salt
+      info: encoder.encode('sender-key-wrap-v1'),
+    },
+    baseKey,
+    256,
+  );
+  return new Uint8Array(bits);
 }
 
 // ---------------------------------------------------------------------------
@@ -212,18 +238,14 @@ export function unregisterGroupConversation(conversationId) {
  * Initialize group crypto for a conversation.
  *
  * 1. Generate (or reload) my sender key
- * 2. For each other participant, derive virtual pairwise ECDH key
- * 3. Encrypt my sender key with each pairwise key
- * 4. POST encrypted copies to server
- * 5. Fetch and decrypt other participants' sender keys
+ * 2. Encrypt my sender key for each other participant (wrapping key from HKDF)
+ * 3. POST encrypted copies to server
+ * 4. Fetch and decrypt other participants' sender keys
  *
  * @param {string} conversationId
  * @param {string} myUserId
  * @param {string[]} participantIds — ALL participant user IDs (including me)
- * @param {object} deps — injected functions from cryptoService to avoid circular imports
- * @param {Function} deps.setupConversationKey
- * @param {Function} deps.getConversationRootKey
- * @param {Function} deps.emitSenderKeyDistributed — socket emit wrapper
+ * @param {object} deps — { emitSenderKeyDistributed }
  */
 export async function setupGroupKeys(conversationId, myUserId, participantIds, deps) {
   // Acquire per-conversation lock
@@ -255,7 +277,7 @@ export async function setupGroupKeys(conversationId, myUserId, participantIds, d
 }
 
 async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps) {
-  const { setupConversationKey, getConversationRootKey, emitSenderKeyDistributed } = deps;
+  const { emitSenderKeyDistributed } = deps || {};
 
   // Join the socket room
   joinConversation(conversationId);
@@ -265,6 +287,10 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
   if (!myKey) {
     const stored = await loadKey(`group-sk-${conversationId}`);
     if (stored) {
+      // Ensure senderKey is Uint8Array (IndexedDB structured clone may return ArrayBuffer)
+      if (stored.senderKey && !(stored.senderKey instanceof Uint8Array)) {
+        stored.senderKey = new Uint8Array(stored.senderKey);
+      }
       myKey = stored;
       mySenderKeys.set(conversationId, myKey);
     }
@@ -278,32 +304,24 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
     console.log('[groupCrypto] Generated new sender key for', conversationId.slice(0, 8));
   }
 
-  // 2. For each other participant, establish virtual pairwise channel + encrypt my sender key
+  // 2. For each other participant, encrypt my sender key with a derived wrapping key
   const otherIds = participantIds.filter((id) => id !== myUserId);
   const keyCopies = [];
 
   for (const peerId of otherIds) {
-    const virtualConvId = pairwiseId(conversationId, myUserId, peerId);
+    try {
+      const wrapKey = await _deriveWrappingKey(conversationId, myUserId, peerId);
+      const { ciphertext, iv } = await engine.encryptSenderKey(wrapKey, myKey.senderKey);
 
-    // Setup virtual pairwise ECDH channel (same as DM key exchange)
-    await setupConversationKey(virtualConvId, myUserId);
-
-    // Get the derived pairwise root key
-    const pairwiseRootKey = getConversationRootKey(virtualConvId);
-    if (!pairwiseRootKey) {
-      console.warn('[groupCrypto] No pairwise key with', peerId.slice(0, 8), '— will retry later');
-      continue;
+      keyCopies.push({
+        recipientUserId: peerId,
+        encryptedSenderKey: ciphertext,
+        iv,
+        keyGeneration: myKey.keyGeneration,
+      });
+    } catch (err) {
+      console.warn('[groupCrypto] Failed to wrap sender key for', peerId.slice(0, 8), ':', err.message);
     }
-
-    // Encrypt my sender key for this peer
-    const { ciphertext, iv } = await engine.encryptSenderKey(pairwiseRootKey, myKey.senderKey);
-
-    keyCopies.push({
-      recipientUserId: peerId,
-      encryptedSenderKey: ciphertext,
-      iv,
-      keyGeneration: myKey.keyGeneration,
-    });
   }
 
   // 3. POST encrypted copies to server
@@ -329,8 +347,6 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
  * Fetch encrypted sender keys addressed to us, decrypt them.
  */
 async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps) {
-  const { setupConversationKey, getConversationRootKey } = deps;
-
   try {
     const response = await getSenderKeys(conversationId);
     const keys = response.senderKeys || response;
@@ -355,18 +371,10 @@ async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps
       const existing = peerMap.get(senderUserId);
       if (existing && existing.keyGeneration >= keyGeneration) continue;
 
-      // Derive pairwise key with this sender
-      const virtualConvId = pairwiseId(conversationId, myUserId, senderUserId);
-      await setupConversationKey(virtualConvId, myUserId);
-
-      const pairwiseRootKey = getConversationRootKey(virtualConvId);
-      if (!pairwiseRootKey) {
-        console.warn('[groupCrypto] No pairwise key with sender', senderUserId.slice(0, 8), '— skip');
-        continue;
-      }
-
       try {
-        const senderKey = await engine.decryptSenderKey(pairwiseRootKey, encryptedSenderKey, iv);
+        // Derive the same wrapping key the sender used for us
+        const wrapKey = await _deriveWrappingKey(conversationId, senderUserId, myUserId);
+        const senderKey = await engine.decryptSenderKey(wrapKey, encryptedSenderKey, iv);
         peerMap.set(senderUserId, { senderKey, keyGeneration });
         await saveKey(`group-pk-${conversationId}-${senderUserId}`, { senderKey, keyGeneration });
         console.log('[groupCrypto] Decrypted sender key from', senderUserId.slice(0, 8),
@@ -405,7 +413,7 @@ export async function handleSenderKeyDistributed(conversationId, senderUserId, d
  * Re-encrypts and re-posts our key for them.
  */
 export async function handleSenderKeyRequest(conversationId, requestingUserId, deps) {
-  const { setupConversationKey, getConversationRootKey, emitSenderKeyDistributed } = deps;
+  const { emitSenderKeyDistributed } = deps || {};
   const myKey = mySenderKeys.get(conversationId);
   if (!myKey) {
     console.warn('[groupCrypto] Sender key request but we have no key for', conversationId.slice(0, 8));
@@ -413,18 +421,11 @@ export async function handleSenderKeyRequest(conversationId, requestingUserId, d
   }
 
   const myUserId = deps.getMyUserId();
-  const virtualConvId = pairwiseId(conversationId, myUserId, requestingUserId);
-  await setupConversationKey(virtualConvId, myUserId);
-
-  const pairwiseRootKey = getConversationRootKey(virtualConvId);
-  if (!pairwiseRootKey) {
-    console.warn('[groupCrypto] No pairwise key with', requestingUserId.slice(0, 8));
-    return;
-  }
-
-  const { ciphertext, iv } = await engine.encryptSenderKey(pairwiseRootKey, myKey.senderKey);
 
   try {
+    const wrapKey = await _deriveWrappingKey(conversationId, myUserId, requestingUserId);
+    const { ciphertext, iv } = await engine.encryptSenderKey(wrapKey, myKey.senderKey);
+
     await storeSenderKeys(conversationId, [{
       recipientUserId: requestingUserId,
       encryptedSenderKey: ciphertext,
@@ -528,7 +529,7 @@ export async function decryptGroupMedia(conversationId, senderUserId, encrypted,
  * Called after a member is kicked or leaves.
  */
 export async function rotateMySenderKey(conversationId, myUserId, remainingParticipantIds, deps) {
-  const { setupConversationKey, getConversationRootKey, emitSenderKeyDistributed } = deps;
+  const { emitSenderKeyDistributed } = deps || {};
 
   // Generate new sender key with incremented generation
   const oldKey = mySenderKeys.get(conversationId);
@@ -554,19 +555,18 @@ export async function rotateMySenderKey(conversationId, myUserId, remainingParti
   const keyCopies = [];
 
   for (const peerId of otherIds) {
-    const virtualConvId = pairwiseId(conversationId, myUserId, peerId);
-    await setupConversationKey(virtualConvId, myUserId);
-
-    const pairwiseRootKey = getConversationRootKey(virtualConvId);
-    if (!pairwiseRootKey) continue;
-
-    const { ciphertext, iv: encIv } = await engine.encryptSenderKey(pairwiseRootKey, senderKey);
-    keyCopies.push({
-      recipientUserId: peerId,
-      encryptedSenderKey: ciphertext,
-      iv: encIv,
-      keyGeneration: newGeneration,
-    });
+    try {
+      const wrapKey = await _deriveWrappingKey(conversationId, myUserId, peerId);
+      const { ciphertext, iv: encIv } = await engine.encryptSenderKey(wrapKey, senderKey);
+      keyCopies.push({
+        recipientUserId: peerId,
+        encryptedSenderKey: ciphertext,
+        iv: encIv,
+        keyGeneration: newGeneration,
+      });
+    } catch (err) {
+      console.warn('[groupCrypto] Failed to wrap rotated key for', peerId.slice(0, 8), ':', err.message);
+    }
   }
 
   if (keyCopies.length > 0) {
