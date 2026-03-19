@@ -203,6 +203,9 @@ router.post(
       // If lock has expired, reset failed attempts
       if (user.locked_until && now >= user.locked_until) {
         db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id);
+        // Keep in-memory state in sync so attempt counting below is correct
+        user.failed_login_attempts = 0;
+        user.locked_until = null;
       }
 
       const valid = await bcrypt.compare(password, user.password_hash);

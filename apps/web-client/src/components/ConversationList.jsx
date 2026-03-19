@@ -241,7 +241,7 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
       const result = await changePassword(currentPw, newPw);
       // Server regenerates session nonce on password change — save the fresh token
       if (result?.token) {
-        localStorage.setItem('token', result.token);
+        localStorage.setItem('blink-token', result.token);
       }
       setPwMsg({ type: 'success', text: 'Password changed!' });
       setCurrentPw('');

@@ -8,7 +8,10 @@ const { authenticateToken } = require('../auth');
 
 const router = express.Router();
 
-const MAX_CONVERSATIONS_PER_USER = parseInt(process.env.MAX_CONVERSATIONS_PER_USER || '500', 10);
+const parsedMaxConversations = parseInt(process.env.MAX_CONVERSATIONS_PER_USER, 10);
+const MAX_CONVERSATIONS_PER_USER = Number.isInteger(parsedMaxConversations) && parsedMaxConversations > 0
+  ? parsedMaxConversations
+  : 500;
 
 router.use(authenticateToken);
 

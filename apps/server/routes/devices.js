@@ -8,7 +8,10 @@ const { authenticateToken } = require('../auth');
 
 const router = express.Router();
 
-const MAX_DEVICES_PER_USER = parseInt(process.env.MAX_DEVICES_PER_USER || '5', 10);
+const parsedMaxDevices = parseInt(process.env.MAX_DEVICES_PER_USER, 10);
+const MAX_DEVICES_PER_USER = Number.isInteger(parsedMaxDevices) && parsedMaxDevices > 0
+  ? parsedMaxDevices
+  : 5;
 
 router.use(authenticateToken);
 

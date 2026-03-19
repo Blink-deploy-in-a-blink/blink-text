@@ -8,6 +8,9 @@ const { authenticateToken } = require('../auth');
 
 const router = express.Router();
 
+// Ensure an index exists for efficient reporter-based rate-limit queries
+db.prepare('CREATE INDEX IF NOT EXISTS idx_reports_reporter_created ON reports(reporter_id, created_at)').run();
+
 const VALID_REASONS = ['spam', 'harassment', 'illegal_content', 'impersonation', 'other'];
 
 const MAX_REPORTS_PER_USER_PER_HOUR = 5;

@@ -2,7 +2,7 @@
 
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4, validate: uuidValidate } = require('uuid');
 const fs = require('fs');
 const path = require('path');
 const db = require('./db');
@@ -162,7 +162,16 @@ function registerSocketHandlers(io) {
       }
 
       try {
-        const messageId = uuidv4(); // Always server-generated — never trust client-provided IDs
+        // Prefer a valid, unused client-provided message ID to support optimistic UI reconciliation.
+        // Fall back to server-generated UUID when invalid or colliding.
+        let messageId;
+        const clientId = msg && typeof msg.id === 'string' ? msg.id : null;
+        if (clientId && uuidValidate(clientId)) {
+          const existing = db.prepare('SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?').get(clientId, conversationId);
+          messageId = existing ? uuidv4() : clientId;
+        } else {
+          messageId = uuidv4();
+        }
         const timestamp = Date.now();
         const replyToId = (msg && msg.replyToId) || null;
         const messageType = (msg && msg.messageType) || 'text';
@@ -264,9 +273,18 @@ function registerSocketHandlers(io) {
         return;
       }
 
-      // Reject oversized ciphertext on edits (same limit as send)
-      if (encPayload.ciphertext && (typeof encPayload.ciphertext !== 'string' || encPayload.ciphertext.length > MAX_CIPHERTEXT_LENGTH)) {
-        if (typeof ack === 'function') ack({ error: 'Edited message payload too large' });
+      // Validate edit payload: require ciphertext + iv, enforce size limit
+      if (typeof encPayload !== 'object') {
+        if (typeof ack === 'function') ack({ error: 'Invalid encrypted payload' });
+        return;
+      }
+      const { ciphertext, iv, version, chainIdx } = encPayload;
+      if (typeof ciphertext !== 'string' || ciphertext.length === 0 || ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
+        if (typeof ack === 'function') ack({ error: 'Edited message payload missing or too large' });
+        return;
+      }
+      if (typeof iv !== 'string' || iv.length === 0) {
+        if (typeof ack === 'function') ack({ error: 'Invalid encrypted payload' });
         return;
       }
 
@@ -285,13 +303,12 @@ function registerSocketHandlers(io) {
           return;
         }
 
-        const { ciphertext, iv, version } = encPayload;
         db.prepare('UPDATE messages SET ciphertext = ?, iv = ?, version = ?, edited = 1, chain_idx = ? WHERE id = ?')
-          .run(ciphertext, iv, version || 'v1', encPayload.chainIdx != null ? encPayload.chainIdx : null, messageId);
+          .run(ciphertext, iv, version || 'v1', chainIdx != null ? chainIdx : null, messageId);
 
         io.to(conversationId).emit('message_edited', {
           conversationId, messageId,
-          payload: { ciphertext, iv, version: version || 'v1', chainIdx: encPayload.chainIdx != null ? encPayload.chainIdx : undefined },
+          payload: { ciphertext, iv, version: version || 'v1', chainIdx: chainIdx != null ? chainIdx : undefined },
         });
         if (typeof ack === 'function') ack({ success: true });
       } catch (err) {
