@@ -8,6 +8,11 @@ const { authenticateToken } = require('../auth');
 
 const router = express.Router();
 
+const parsedMaxDevices = parseInt(process.env.MAX_DEVICES_PER_USER, 10);
+const MAX_DEVICES_PER_USER = Number.isInteger(parsedMaxDevices) && parsedMaxDevices > 0
+  ? parsedMaxDevices
+  : 5;
+
 router.use(authenticateToken);
 
 // POST /api/devices - register a new device for the authenticated user
@@ -25,6 +30,12 @@ router.post(
     const { identityPublicKey, ecdhPublicKey, deviceName } = req.body;
 
     try {
+      // Enforce per-user device limit to prevent database exhaustion
+      const deviceCount = db.prepare('SELECT COUNT(*) as count FROM devices WHERE user_id = ?').get(req.user.id).count;
+      if (deviceCount >= MAX_DEVICES_PER_USER) {
+        return res.status(400).json({ error: `Maximum device limit (${MAX_DEVICES_PER_USER}) reached. Remove a device first.` });
+      }
+
       const id = uuidv4();
       db.prepare(
         'INSERT INTO devices (id, user_id, device_name, identity_public_key, ecdh_public_key) VALUES (?, ?, ?, ?, ?)'

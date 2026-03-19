@@ -72,8 +72,8 @@ export const login = (username, password) =>
 export const getConversations = () =>
   api.get('/api/conversations').then((r) => r.data.conversations);
 
-export const createConversation = (type, participants, name) =>
-  api.post('/api/conversations', { type, participants, name }).then((r) => r.data.conversation);
+export const createConversation = (type, participants, name, disappearAfter) =>
+  api.post('/api/conversations', { type, participants, name, disappearAfter }).then((r) => r.data.conversation);
 
 export const getMessages = (conversationId, { limit, before } = {}) => {
   const params = {};
@@ -218,3 +218,25 @@ export const checkBlocked = (userId) =>
 
 export const clearChat = (conversationId) =>
   api.delete(`/api/conversations/${conversationId}/clear`).then((r) => r.data);
+
+// ── Disappearing messages ──
+
+/**
+ * Update the disappearing message timer for a conversation.
+ * @param {string} conversationId
+ * @param {number|null} disappearAfter — duration in ms, or null to disable
+ * @returns {Promise<{ updated: boolean, disappearAfter: number|null, systemMessage: string }>}
+ */
+export const updateConversationTimer = (conversationId, disappearAfter) =>
+  api.put(`/api/conversations/${conversationId}/disappear`, { disappearAfter }).then((r) => r.data);
+
+// ── Nuke chat ──
+
+/**
+ * Permanently delete ALL messages and media from a conversation for both participants.
+ * This is irreversible.
+ * @param {string} conversationId
+ * @returns {Promise<{ nuked: boolean, messagesDeleted: number, mediaDeleted: number }>}
+ */
+export const nukeChat = (conversationId) =>
+  api.delete(`/api/conversations/${conversationId}/nuke`).then((r) => r.data);

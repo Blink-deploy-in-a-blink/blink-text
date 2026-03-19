@@ -17,6 +17,17 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+/**
+ * Mask registration IPs for privacy.
+ * IPv4: keep first two octets, mask the rest.
+ * IPv6 (or anything with colons): fully hidden.
+ */
+function maskRegistrationIp(ip) {
+  if (!ip) return null;
+  if (ip.includes(':')) return '(hidden)'; // IPv6
+  return ip.replace(/(\d+\.\d+)\.\d+\.\d+/, '$1.x.x');
+}
+
 // GET /api/admin/verify — check if the current user is an admin.
 // This is the ONLY way the client discovers admin status.
 // The check hits the DB directly on every call — never trusts client-side data.
@@ -96,6 +107,8 @@ router.get('/users', authenticateToken, requireAdmin, (req, res) => {
       is_admin: !!u.is_admin,
       is_banned: !!u.is_banned,
       report_count: u.report_count,
+      // Mask registration IPs by default — IPv4: first two octets; IPv6: fully hidden
+      registration_ip: maskRegistrationIp(u.registration_ip),
     }));
 
     return res.json({ users: usersWithReports, total, page, limit });

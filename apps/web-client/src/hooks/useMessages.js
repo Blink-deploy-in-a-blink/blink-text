@@ -289,10 +289,42 @@ export function useMessages(conversationId, myUserId) {
     socket.on('message_deleted', onMessageDeleted);
     socket.on('message_edited', onMessageEdited);
 
+    // Disappearing messages: server deleted expired messages
+    const onMessagesExpired = ({ conversationId: cid, messageIds }) => {
+      if (cid !== conversationId) return;
+      if (!Array.isArray(messageIds) || messageIds.length === 0) return;
+      const expiredSet = new Set(messageIds);
+      // Remove from cache
+      for (const mid of messageIds) removeCachedMessage(conversationId, mid);
+      if (isMounted.current) {
+        setMessages((prev) => prev.filter((m) => !expiredSet.has(m.id)));
+      }
+    };
+
+    // Nuke chat: all messages wiped from server
+    const onConversationNuked = ({ conversationId: cid }) => {
+      if (cid !== conversationId) return;
+      // Dispatch event so ChatWindow can play the nuke animation
+      window.dispatchEvent(new CustomEvent('blink-nuke', { detail: { conversationId: cid } }));
+      // Delay clearing messages so the animation plays over them before they vanish
+      setTimeout(() => {
+        setCachedMessages(conversationId, [], false);
+        if (isMounted.current) {
+          setMessages([]);
+          setHasMore(false);
+        }
+      }, 800);
+    };
+
+    socket.on('messages_expired', onMessagesExpired);
+    socket.on('conversation_nuked', onConversationNuked);
+
     return () => {
       socket.off('message', onMessage);
       socket.off('message_deleted', onMessageDeleted);
       socket.off('message_edited', onMessageEdited);
+      socket.off('messages_expired', onMessagesExpired);
+      socket.off('conversation_nuked', onConversationNuked);
     };
   }, [conversationId]);
 

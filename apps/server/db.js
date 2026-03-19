@@ -115,12 +115,31 @@ if (!messageColumns.includes('chain_idx')) {
   db.exec("ALTER TABLE messages ADD COLUMN chain_idx INTEGER DEFAULT NULL");
 }
 
+// Disappearing messages: per-message expiry timestamp (ms)
+if (!messageColumns.includes('expires_at')) {
+  db.exec("ALTER TABLE messages ADD COLUMN expires_at INTEGER DEFAULT NULL");
+}
+
+// Disappearing messages: per-conversation default timer (ms duration), NULL = off
+const convColumns = db.prepare("PRAGMA table_info(conversations)").all().map(c => c.name);
+if (!convColumns.includes('disappear_after')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN disappear_after INTEGER DEFAULT NULL");
+}
+
 // Session nonce for single-session enforcement.
 // Each login generates a fresh nonce stored in the DB and embedded in the JWT.
 // Every authenticated request checks that the JWT's nonce matches the DB.
 // If another device logs in, the nonce changes and the old JWT is instantly invalid.
 if (!userColumns.includes('session_nonce')) {
   db.exec("ALTER TABLE users ADD COLUMN session_nonce TEXT DEFAULT NULL");
+}
+
+// Account lockout: track failed login attempts per user
+if (!userColumns.includes('failed_login_attempts')) {
+  db.exec("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0");
+}
+if (!userColumns.includes('locked_until')) {
+  db.exec("ALTER TABLE users ADD COLUMN locked_until INTEGER DEFAULT NULL");
 }
 
 // Reports table for user reporting mechanism
@@ -153,6 +172,21 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON user_blocks(blocker_id);
   CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON user_blocks(blocked_id);
+`);
+
+// Performance indexes for rate-limit and quota queries
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_media_sender_id ON media(sender_id);
+  CREATE INDEX IF NOT EXISTS idx_reports_reporter_created ON reports(reporter_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_messages_expires ON messages(expires_at) WHERE expires_at IS NOT NULL;
+`);
+
+// Enforce at most one pending report per (reporter, reported_user) pair at the DB level
+// This makes the dedup check atomic — even concurrent requests can't create duplicates.
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_unique_pending
+  ON reports(reporter_id, reported_user_id)
+  WHERE status = 'pending';
 `);
 
 module.exports = db;

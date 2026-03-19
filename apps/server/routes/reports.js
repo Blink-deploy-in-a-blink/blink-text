@@ -10,6 +10,8 @@ const router = express.Router();
 
 const VALID_REASONS = ['spam', 'harassment', 'illegal_content', 'impersonation', 'other'];
 
+const MAX_REPORTS_PER_USER_PER_HOUR = 5;
+
 // POST /api/reports — submit a report against a user/message
 router.post(
   '/',
@@ -32,6 +34,23 @@ router.post(
     // Cannot report yourself
     if (reportedUserId === req.user.id) {
       return res.status(400).json({ error: 'Cannot report yourself' });
+    }
+
+    // Rate limit: max reports per user per hour
+    const oneHourAgo = Math.floor(Date.now() / 1000) - 3600;
+    const recentReportCount = db.prepare(
+      'SELECT COUNT(*) as count FROM reports WHERE reporter_id = ? AND created_at > ?'
+    ).get(req.user.id, oneHourAgo).count;
+    if (recentReportCount >= MAX_REPORTS_PER_USER_PER_HOUR) {
+      return res.status(429).json({ error: 'Too many reports. Please try again later.' });
+    }
+
+    // Deduplicate: max 1 pending report per (reporter, reported_user) pair
+    const existingReport = db.prepare(
+      "SELECT id FROM reports WHERE reporter_id = ? AND reported_user_id = ? AND status = 'pending'"
+    ).get(req.user.id, reportedUserId);
+    if (existingReport) {
+      return res.status(409).json({ error: 'You already have a pending report against this user' });
     }
 
     // Verify reported user exists
@@ -78,6 +97,11 @@ router.post(
 
       return res.status(201).json({ message: 'Report submitted', reportId: id });
     } catch (err) {
+      // Handle race where another request created a pending report concurrently
+      // (unique partial index idx_reports_unique_pending enforces this at the DB level)
+      if (err && typeof err.message === 'string' && err.message.includes('UNIQUE constraint failed')) {
+        return res.status(409).json({ error: 'You already have a pending report against this user' });
+      }
       console.error('Report submission error:', err);
       return res.status(500).json({ error: 'Internal server error' });
     }

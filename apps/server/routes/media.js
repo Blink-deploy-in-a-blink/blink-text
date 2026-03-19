@@ -11,6 +11,19 @@ const { authenticateToken } = require('../auth');
 const router = express.Router();
 router.use(authenticateToken);
 
+// Per-user storage limit (default 500 MB)
+const DEFAULT_MAX_STORAGE = 500 * 1024 * 1024;
+const parsedMaxStorage = parseInt(process.env.MAX_STORAGE_PER_USER, 10);
+const MAX_STORAGE_PER_USER = Number.isFinite(parsedMaxStorage) && parsedMaxStorage > 0
+  ? parsedMaxStorage
+  : DEFAULT_MAX_STORAGE;
+
+/** Best-effort file cleanup — never throws, so error responses aren't masked. */
+function safeUnlink(filePath) {
+  if (!filePath) return;
+  try { fs.unlinkSync(filePath); } catch (_err) { /* ignore */ }
+}
+
 // Uploads directory — encrypted files only
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
@@ -42,7 +55,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
     const { conversationId, iv } = req.body;
     if (!conversationId || !iv) {
       // Clean up the uploaded file
-      fs.unlinkSync(req.file.path);
+      safeUnlink(req.file.path);
       return res.status(400).json({ error: 'conversationId and iv are required' });
     }
 
@@ -52,8 +65,21 @@ router.post('/upload', upload.single('file'), (req, res) => {
     ).get(conversationId, req.user.id);
 
     if (!participant) {
-      fs.unlinkSync(req.file.path);
+      safeUnlink(req.file.path);
       return res.status(403).json({ error: 'Not a participant in this conversation' });
+    }
+
+    // Enforce per-user storage quota
+    const totalStorage = db.prepare(
+      'SELECT COALESCE(SUM(file_size), 0) as total FROM media WHERE sender_id = ?'
+    ).get(req.user.id).total;
+    if (totalStorage + req.file.size > MAX_STORAGE_PER_USER) {
+      safeUnlink(req.file.path);
+      return res.status(413).json({
+        error: 'Storage quota exceeded',
+        used: totalStorage,
+        limit: MAX_STORAGE_PER_USER,
+      });
     }
 
     const mediaId = uuidv4();
@@ -66,9 +92,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
     return res.status(201).json({ mediaId, fileSize: req.file.size });
   } catch (err) {
     // Clean up on error
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
+    safeUnlink(req.file && req.file.path);
     console.error('Media upload error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -2,13 +2,13 @@
 
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4, validate: uuidValidate } = require('uuid');
 const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 const { validateEncryptedMessage, validateKeyExchange } = require('@blink-text/shared');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+const JWT_SECRET = process.env.JWT_SECRET; // validated at startup by auth.js
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(__dirname, 'uploads');
@@ -16,6 +16,9 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR
 // WebSocket rate limiting: max messages per window per user
 const WS_RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
 const WS_RATE_LIMIT_MAX = 30;           // max 30 messages per window
+
+// Max ciphertext length (~24 KB of plaintext after base64 encoding)
+const MAX_CIPHERTEXT_LENGTH = 32768;
 
 /**
  * Simple in-memory rate limiter for WebSocket events.
@@ -51,6 +54,66 @@ function createWsRateLimiter() {
  */
 function registerSocketHandlers(io) {
   const wsRateCheck = createWsRateLimiter();
+
+  // ── Disappearing messages: cleanup interval (every 30s) ──
+  // Deletes expired messages + associated media files from disk, then notifies clients.
+  const expiryCleanupInterval = setInterval(() => {
+    try {
+      const now = Date.now();
+      // Find expired messages grouped by conversation
+      const expired = db.prepare(
+        'SELECT id, conversation_id, media_id FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?'
+      ).all(now);
+
+      if (expired.length === 0) return;
+
+      // Group by conversation for batched socket events
+      const byConversation = {};
+      for (const msg of expired) {
+        if (!byConversation[msg.conversation_id]) byConversation[msg.conversation_id] = [];
+        byConversation[msg.conversation_id].push(msg);
+      }
+
+      // Delete media files from disk + DB, then delete messages
+      const deleteMedia = db.prepare('DELETE FROM media WHERE id = ?');
+      const deleteMessage = db.prepare('DELETE FROM messages WHERE id = ?');
+      const deleteMessageDeletions = db.prepare('DELETE FROM message_deletions WHERE message_id = ?');
+
+      const cleanupTransaction = db.transaction(() => {
+        for (const msg of expired) {
+          // Clean up media file if present
+          if (msg.media_id) {
+            try {
+              const media = db.prepare('SELECT file_path FROM media WHERE id = ?').get(msg.media_id);
+              if (media) {
+                const filePath = path.join(UPLOADS_DIR, media.file_path);
+                try { fs.unlinkSync(filePath); } catch (_e) { /* best-effort */ }
+                deleteMedia.run(msg.media_id);
+              }
+            } catch (_e) { /* continue cleanup */ }
+          }
+          deleteMessageDeletions.run(msg.id);
+          deleteMessage.run(msg.id);
+        }
+      });
+      cleanupTransaction();
+
+      // Notify connected clients per conversation
+      for (const [conversationId, msgs] of Object.entries(byConversation)) {
+        io.to(conversationId).emit('messages_expired', {
+          conversationId,
+          messageIds: msgs.map(m => m.id),
+        });
+      }
+
+      if (expired.length > 0) {
+        console.log(`[expiry] Cleaned up ${expired.length} expired message(s)`);
+      }
+    } catch (err) {
+      console.error('[expiry] Cleanup error:', err);
+    }
+  }, 30_000); // every 30 seconds
+  expiryCleanupInterval.unref();
 
   io.use((socket, next) => {
     const token = socket.handshake.auth && socket.handshake.auth.token;
@@ -143,6 +206,12 @@ function registerSocketHandlers(io) {
       const { conversationId, payload: encPayload } = payload;
       const { ciphertext, iv, version } = encPayload;
 
+      // Reject oversized ciphertext to prevent database bloat
+      if (typeof ciphertext !== 'string' || ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
+        if (typeof ack === 'function') ack({ error: 'Message payload too large' });
+        return;
+      }
+
       const participant = db.prepare(
         'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
       ).get(conversationId, userId);
@@ -153,7 +222,17 @@ function registerSocketHandlers(io) {
       }
 
       try {
-        const messageId = payload.id || uuidv4();
+        // Prefer a valid, unused client-provided message ID to support optimistic UI reconciliation.
+        // Fall back to server-generated UUID when invalid or colliding.
+        let messageId;
+        const clientId = msg && typeof msg.id === 'string' ? msg.id : null;
+        if (clientId && uuidValidate(clientId)) {
+          // messages.id is a global primary key — check across all conversations
+          const existing = db.prepare('SELECT 1 FROM messages WHERE id = ?').get(clientId);
+          messageId = existing ? uuidv4() : clientId;
+        } else {
+          messageId = uuidv4();
+        }
         const timestamp = Date.now();
         const replyToId = (msg && msg.replyToId) || null;
         const messageType = (msg && msg.messageType) || 'text';
@@ -175,9 +254,13 @@ function registerSocketHandlers(io) {
           }
         }
 
+        // Look up conversation's disappearing message timer
+        const conv = db.prepare('SELECT disappear_after FROM conversations WHERE id = ?').get(conversationId);
+        const expiresAt = (conv && conv.disappear_after) ? timestamp + conv.disappear_after : null;
+
         db.prepare(
-          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp, message_type, media_id, chain_idx) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp, messageType, mediaId, chainIdx);
+          'INSERT INTO messages (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, timestamp, message_type, media_id, chain_idx, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(messageId, conversationId, userId, ciphertext, iv, version || 'v1', replyToId, timestamp, messageType, mediaId, chainIdx, expiresAt);
 
         const message = {
           id: messageId,
@@ -189,6 +272,7 @@ function registerSocketHandlers(io) {
           payload: { ciphertext, iv, version: version || 'v1', chainIdx },
           messageType,
           mediaId,
+          expiresAt,
         };
 
         io.to(conversationId).emit('message', message);
@@ -255,6 +339,21 @@ function registerSocketHandlers(io) {
         return;
       }
 
+      // Validate edit payload: require ciphertext + iv, enforce size limit
+      if (typeof encPayload !== 'object') {
+        if (typeof ack === 'function') ack({ error: 'Invalid encrypted payload' });
+        return;
+      }
+      const { ciphertext, iv, version, chainIdx } = encPayload;
+      if (typeof ciphertext !== 'string' || ciphertext.length === 0 || ciphertext.length > MAX_CIPHERTEXT_LENGTH) {
+        if (typeof ack === 'function') ack({ error: 'Edited message payload missing or too large' });
+        return;
+      }
+      if (typeof iv !== 'string' || iv.length === 0) {
+        if (typeof ack === 'function') ack({ error: 'Invalid encrypted payload' });
+        return;
+      }
+
       const participant = db.prepare(
         'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
       ).get(conversationId, userId);
@@ -270,13 +369,12 @@ function registerSocketHandlers(io) {
           return;
         }
 
-        const { ciphertext, iv, version } = encPayload;
         db.prepare('UPDATE messages SET ciphertext = ?, iv = ?, version = ?, edited = 1, chain_idx = ? WHERE id = ?')
-          .run(ciphertext, iv, version || 'v1', encPayload.chainIdx != null ? encPayload.chainIdx : null, messageId);
+          .run(ciphertext, iv, version || 'v1', chainIdx != null ? chainIdx : null, messageId);
 
         io.to(conversationId).emit('message_edited', {
           conversationId, messageId,
-          payload: { ciphertext, iv, version: version || 'v1', chainIdx: encPayload.chainIdx != null ? encPayload.chainIdx : undefined },
+          payload: { ciphertext, iv, version: version || 'v1', chainIdx: chainIdx != null ? chainIdx : undefined },
         });
         if (typeof ack === 'function') ack({ success: true });
       } catch (err) {

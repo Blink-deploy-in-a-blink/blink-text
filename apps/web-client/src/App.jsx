@@ -197,6 +197,34 @@ function MessengerView({ user, logout, onShowHelp }) {
     return () => { socket.off('user_deleted', handleUserDeleted); };
   }, [activeConversation]);
 
+  // Global conversation_timer_changed listener — updates active conversation's timer
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleTimerChanged = ({ conversationId, disappearAfter }) => {
+      // Update the active conversation in state so ChatWindow's header reflects the change
+      if (activeConversation?.id === conversationId) {
+        setActiveConversation((prev) => prev ? { ...prev, disappear_after: disappearAfter } : prev);
+      }
+      // Refresh conversation list to update timer badges
+      conversationListRef.current?.refresh();
+    };
+
+    // Also listen for conversation_nuked to clear active chat + refresh list
+    const handleConversationNuked = ({ conversationId }) => {
+      conversationListRef.current?.refresh();
+      // useMessages already handles clearing messages for the active conversation
+    };
+
+    socket.on('conversation_timer_changed', handleTimerChanged);
+    socket.on('conversation_nuked', handleConversationNuked);
+    return () => {
+      socket.off('conversation_timer_changed', handleTimerChanged);
+      socket.off('conversation_nuked', handleConversationNuked);
+    };
+  }, [activeConversation?.id]);
+
   const handleSelectConversation = useCallback((conv) => {
     const names = (conv.participant_usernames || '').split(',').filter((n) => n !== user.username);
     const selected = { ...conv, displayName: conv.name || names.join(', ') || 'Conversation' };
@@ -313,6 +341,7 @@ function MessengerView({ user, logout, onShowHelp }) {
                 onReport={handleReport}
                 onNewConversation={() => setShowNewModal(true)}
                 onBack={isMobile ? handleBack : null}
+                onTimerChanged={() => conversationListRef.current?.refresh()}
               />
               <MessageInput
                 onSend={handleSend}

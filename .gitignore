@@ -9,3 +9,4 @@ build/
 .DS_Store
 *.local
 apps/server/uploads/*.enc
+package-lock.json

@@ -1,7 +1,34 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
-import { downloadMedia } from '../services/api.js';
+import { downloadMedia, updateConversationTimer } from '../services/api.js';
 import { decryptMediaForConversation } from '../services/cryptoService.js';
 import MediaPreviewModal from './MediaPreviewModal.jsx';
+
+const TIMER_OPTIONS = [
+  { value: null, label: 'Off' },
+  { value: 300000, label: '5 minutes' },
+  { value: 3600000, label: '1 hour' },
+  { value: 86400000, label: '24 hours' },
+  { value: 604800000, label: '7 days' },
+  { value: 2592000000, label: '30 days' },
+];
+
+const TIMER_SHORT_LABELS = {
+  300000: '5m',
+  3600000: '1h',
+  86400000: '24h',
+  604800000: '7d',
+  2592000000: '30d',
+};
+
+/** Format remaining time for an expiring message */
+function formatTimeLeft(expiresAt) {
+  const diff = expiresAt - Date.now();
+  if (diff <= 0) return 'expiring';
+  if (diff < 60000) return `${Math.ceil(diff / 1000)}s`;
+  if (diff < 3600000) return `${Math.ceil(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.round(diff / 3600000)}h`;
+  return `${Math.round(diff / 86400000)}d`;
+}
 
 const s = {
   window: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
@@ -103,6 +130,36 @@ const s = {
     alignItems: 'center', justifyContent: 'center',
     boxShadow: 'var(--shadow-md)', transition: 'opacity 0.2s, transform 0.2s',
     zIndex: 10,
+  },
+  timerBtn: {
+    background: 'transparent', border: 'none', color: 'var(--text-muted)',
+    cursor: 'pointer', padding: '0.15rem 0.4rem', fontSize: 'var(--text-sm)',
+    borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', gap: '0.25rem',
+    marginLeft: 'auto', flexShrink: 0, transition: 'color 0.15s',
+  },
+  timerBadge: {
+    fontSize: 'var(--text-xs)', color: 'var(--accent)', fontWeight: 600,
+  },
+  timerDropdown: {
+    position: 'absolute', top: '100%', right: '1rem', zIndex: 300,
+    background: 'var(--bg-elevated)', border: '1px solid var(--border-light)',
+    borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
+    padding: '0.25rem 0', minWidth: '200px', marginTop: '0.25rem',
+  },
+  timerOption: (active) => ({
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '0.5rem 1rem', width: '100%', background: 'transparent', border: 'none',
+    color: active ? 'var(--accent)' : 'var(--text-primary)', cursor: 'pointer',
+    fontSize: 'var(--text-sm)', textAlign: 'left', fontWeight: active ? 600 : 400,
+    transition: 'background 0.1s',
+  }),
+  timerDropdownTitle: {
+    padding: '0.5rem 1rem 0.25rem', fontSize: 'var(--text-xs)', color: 'var(--text-faint)',
+    fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em',
+  },
+  expiryBadge: {
+    fontSize: '0.65rem', color: 'var(--text-faint)', display: 'inline-flex',
+    alignItems: 'center', gap: '0.15rem', marginLeft: '0.4rem', opacity: 0.7,
   },
 };
 
@@ -277,7 +334,7 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
   return null;
 }
 
-export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, keyReady, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onReport, onNewConversation, onBack }) {
+export default function ChatWindow({ conversation, messages, myUserId, loading, loadingMore, hasMore, keyReady, onLoadMore, onDeleteMessage, onEditMessage, onReply, onForward, onReport, onNewConversation, onBack, onTimerChanged }) {
   const bottomRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y, msg }
@@ -286,8 +343,51 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const [previewMedia, setPreviewMedia] = useState(null); // { objectUrl, mimeType, fileName, messageType }
   const [showScrollFab, setShowScrollFab] = useState(false);
   const longPressTimer = useRef(null);
+  const [showNukeAnimation, setShowNukeAnimation] = useState(false);
   const isInitialLoad = useRef(true);
   const prevMessagesLen = useRef(0);
+  const [showTimerDropdown, setShowTimerDropdown] = useState(false);
+  const [timerUpdating, setTimerUpdating] = useState(false);
+  const timerDropdownRef = useRef(null);
+
+  // Close timer dropdown on outside click
+  useEffect(() => {
+    if (!showTimerDropdown) return;
+    const close = (e) => {
+      if (timerDropdownRef.current && !timerDropdownRef.current.contains(e.target)) {
+        setShowTimerDropdown(false);
+      }
+    };
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [showTimerDropdown]);
+
+  // Handle timer change
+  const handleTimerChange = async (value) => {
+    if (!conversation) return;
+    setTimerUpdating(true);
+    try {
+      await updateConversationTimer(conversation.id, value);
+      // The socket event will update the conversation object in parent
+      onTimerChanged?.();
+    } catch (err) {
+      console.error('Failed to update timer:', err);
+    } finally {
+      setTimerUpdating(false);
+      setShowTimerDropdown(false);
+    }
+  };
+
+  // Listen for nuke animation event
+  useEffect(() => {
+    const handleNuke = (e) => {
+      if (e.detail?.conversationId !== conversation?.id) return;
+      setShowNukeAnimation(true);
+      setTimeout(() => setShowNukeAnimation(false), 1200);
+    };
+    window.addEventListener('blink-nuke', handleNuke);
+    return () => window.removeEventListener('blink-nuke', handleNuke);
+  }, [conversation?.id]);
 
   // Auto-scroll to bottom on initial load or new messages appended at bottom
   useEffect(() => {
@@ -477,7 +577,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
 
   return (
     <div style={s.window}>
-      <div style={s.header}>
+      <div style={{ ...s.header, position: 'relative' }}>
         {onBack && (
           <button
             onClick={onBack}
@@ -492,6 +592,39 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {conversation.displayName || 'Conversation'}
         </span>
+        {/* Timer button */}
+        <button
+          style={s.timerBtn}
+          onClick={(e) => { e.stopPropagation(); setShowTimerDropdown((v) => !v); }}
+          title="Auto-delete timer"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          {conversation.disappear_after && (
+            <span style={s.timerBadge}>{TIMER_SHORT_LABELS[conversation.disappear_after] || 'On'}</span>
+          )}
+        </button>
+        {/* Timer dropdown */}
+        {showTimerDropdown && (
+          <div ref={timerDropdownRef} style={s.timerDropdown} onClick={(e) => e.stopPropagation()}>
+            <div style={s.timerDropdownTitle}>Auto-delete</div>
+            {TIMER_OPTIONS.map((opt) => {
+              const active = (conversation.disappear_after || null) === opt.value;
+              return (
+                <button
+                  key={String(opt.value)}
+                  style={s.timerOption(active)}
+                  disabled={timerUpdating}
+                  onClick={() => handleTimerChange(opt.value)}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  {opt.label}
+                  {active && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       {!!conversation.has_deleted_participant && (
         <div style={{
@@ -517,6 +650,13 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
         </div>
       )}
       <div style={s.messages} ref={messagesContainerRef}>
+        {showNukeAnimation && (
+          <div className="nuke-overlay">
+            <div className="nuke-flash" />
+            <div className="nuke-ring" />
+            <div className="nuke-ring-2" />
+          </div>
+        )}
         {loadingMore && <p style={{ ...s.empty, padding: '0.5rem', fontSize: '0.8rem' }}>Loading older messages…</p>}
         {!loadingMore && hasMore && (
           <button style={s.loadMore} onClick={handleLoadMore}>
@@ -586,6 +726,12 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                     </svg>
                   )}
                   {formatTime(msg.timestamp)}
+                  {msg.expiresAt && (
+                    <span style={s.expiryBadge} title={`Expires ${new Date(msg.expiresAt).toLocaleString()}`}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      {formatTimeLeft(msg.expiresAt)}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
