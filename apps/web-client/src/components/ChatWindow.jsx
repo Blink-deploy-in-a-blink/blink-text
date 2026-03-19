@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
-import { downloadMedia, updateConversationTimer } from '../services/api.js';
+import { downloadMedia, updateConversationTimer, kickMember, updateInviteSettings } from '../services/api.js';
 import { decryptMediaForConversation } from '../services/cryptoService.js';
 import MediaPreviewModal from './MediaPreviewModal.jsx';
 
@@ -349,6 +349,9 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const [showTimerDropdown, setShowTimerDropdown] = useState(false);
   const [timerUpdating, setTimerUpdating] = useState(false);
   const timerDropdownRef = useRef(null);
+  const [showGroupPanel, setShowGroupPanel] = useState(false);
+  const [kickingUserId, setKickingUserId] = useState(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   // Close timer dropdown on outside click
   useEffect(() => {
@@ -376,6 +379,28 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
       setTimerUpdating(false);
       setShowTimerDropdown(false);
     }
+  };
+
+  // Handle kick member (groups)
+  const handleKick = async (userId) => {
+    if (!conversation) return;
+    setKickingUserId(userId);
+    try {
+      await kickMember(conversation.id, userId);
+    } catch (err) {
+      console.error('Failed to kick member:', err);
+    } finally {
+      setKickingUserId(null);
+    }
+  };
+
+  // Handle copy invite link
+  const handleCopyInvite = async () => {
+    if (!conversation?.slug) return;
+    const link = `${window.location.origin}/#/r/${conversation.slug}`;
+    await navigator.clipboard.writeText(link);
+    setInviteCopied(true);
+    setTimeout(() => setInviteCopied(false), 2000);
   };
 
   // Listen for nuke animation event
@@ -420,6 +445,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   useEffect(() => {
     isInitialLoad.current = true;
     prevMessagesLen.current = 0;
+    setShowGroupPanel(false);
   }, [conversation?.id]);
 
   // Preserve scroll position when older messages are prepended
@@ -592,6 +618,21 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {conversation.displayName || 'Conversation'}
         </span>
+        {conversation.type === 'group_chat' && (
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginLeft: '0.4rem', flexShrink: 0 }}>
+            ({(conversation.participant_ids || '').split(',').filter(Boolean).length})
+          </span>
+        )}
+        {/* Group info button */}
+        {conversation.type === 'group_chat' && (
+          <button
+            style={{ ...s.timerBtn, marginLeft: '0.25rem' }}
+            onClick={(e) => { e.stopPropagation(); setShowGroupPanel((v) => !v); }}
+            title="Group info"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </button>
+        )}
         {/* Timer button */}
         <button
           style={s.timerBtn}
@@ -626,6 +667,66 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
           </div>
         )}
       </div>
+
+      {/* Group info panel */}
+      {showGroupPanel && conversation.type === 'group_chat' && (() => {
+        const participantIds = (conversation.participant_ids || '').split(',').filter(Boolean);
+        const participantNames = (conversation.participant_usernames || '').split(',').filter(Boolean);
+        const isCreator = conversation.created_by === myUserId;
+        const expiresAt = conversation.expires_at;
+        return (
+          <div style={{
+            borderBottom: '1px solid var(--border-light)', background: 'var(--bg-elevated)',
+            padding: '0.75rem 1.25rem', flexShrink: 0, maxHeight: '40vh', overflowY: 'auto',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                Members ({participantIds.length})
+              </span>
+              <button
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-xs)' }}
+                onClick={() => setShowGroupPanel(false)}
+              >Close</button>
+            </div>
+            {participantIds.map((id, i) => (
+              <div key={id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.3rem 0' }}>
+                <span style={{ fontSize: 'var(--text-sm)', color: id === myUserId ? 'var(--accent)' : 'var(--text-primary)' }}>
+                  {participantNames[i] || id.slice(0, 8)}
+                  {id === conversation.created_by && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginLeft: '0.3rem' }}>Admin</span>}
+                  {id === myUserId && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginLeft: '0.3rem' }}>(you)</span>}
+                </span>
+                {isCreator && id !== myUserId && (
+                  <button
+                    style={{ background: 'none', border: '1px solid var(--danger-muted)', borderRadius: 'var(--radius-sm)', color: 'var(--danger-muted)', fontSize: 'var(--text-xs)', padding: '0.15rem 0.5rem', cursor: 'pointer' }}
+                    disabled={kickingUserId === id}
+                    onClick={() => handleKick(id)}
+                  >{kickingUserId === id ? 'Kicking...' : 'Kick'}</button>
+                )}
+              </div>
+            ))}
+
+            {conversation.slug && (
+              <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Invite Link</div>
+                <div style={{ fontFamily: 'monospace', fontSize: 'var(--text-xs)', color: 'var(--accent)', wordBreak: 'break-all', marginBottom: '0.35rem' }}>
+                  {window.location.origin}/#/r/{conversation.slug}
+                </div>
+                <button
+                  style={{ background: 'none', border: '1px solid var(--accent)', borderRadius: 'var(--radius-sm)', color: 'var(--accent)', fontSize: 'var(--text-xs)', padding: '0.2rem 0.6rem', cursor: 'pointer' }}
+                  onClick={handleCopyInvite}
+                >{inviteCopied ? 'Copied!' : 'Copy Link'}</button>
+              </div>
+            )}
+
+            {expiresAt && (
+              <div style={{ marginTop: '0.5rem', fontSize: 'var(--text-xs)', color: expiresAt <= Date.now() ? 'var(--danger-muted)' : 'var(--text-muted)' }}>
+                {expiresAt <= Date.now() ? 'Room expired' : `Expires ${new Date(expiresAt).toLocaleString()}`}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {!!conversation.has_deleted_participant && (
         <div style={{
           padding: '0.5rem 1.25rem', background: 'rgba(248,113,113,0.08)', borderBottom: '1px solid var(--border-light)',
@@ -700,6 +801,18 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
               )}
 
               <div style={s.bubbleCol(mine)}>
+                {/* Show sender name in group conversations for other people's messages */}
+                {conversation.type === 'group_chat' && !mine && (() => {
+                  const ids = (conversation.participant_ids || '').split(',').filter(Boolean);
+                  const names = (conversation.participant_usernames || '').split(',').filter(Boolean);
+                  const idx = ids.indexOf(msg.senderId);
+                  const senderName = idx >= 0 ? names[idx] : msg.senderId?.slice(0, 8);
+                  return (
+                    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent)', marginBottom: '0.1rem' }}>
+                      {senderName}
+                    </span>
+                  );
+                })()}
                 {replyText && (
                   <div style={s.replyQuote}><span style={{display:'inline-flex',alignItems:'center',gap:'0.25rem'}}><MReplyIcon /> {replyText}</span></div>
                 )}

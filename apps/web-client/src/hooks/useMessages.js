@@ -8,7 +8,16 @@ import {
   encryptMediaForConversation,
   decryptConversationMessage,
   hasConversationKey,
+  getConversationRootKey,
 } from '../services/cryptoService.js';
+import {
+  isGroupConversation,
+  handleSenderKeyDistributed,
+  handleSenderKeyRequest,
+  setupGroupKeys,
+  hasGroupKeys,
+} from '../services/groupCrypto.js';
+import { emitSenderKeyDistributed } from '../services/socket.js';
 import {
   getCachedMessages,
   setCachedMessages,
@@ -39,7 +48,7 @@ export function useMessages(conversationId, myUserId) {
     return Promise.all(
       rawMessages.map(async (msg) => {
         try {
-          const plaintext = await decryptConversationMessage(conversationId, msg.payload);
+          const plaintext = await decryptConversationMessage(conversationId, msg.payload, msg.senderId);
           return { ...msg, plaintext };
         } catch (err) {
           console.warn('[useMessages] Failed to decrypt message:', msg.id, err);
@@ -175,7 +184,7 @@ export function useMessages(conversationId, myUserId) {
         const decrypted = await Promise.all(
           rawMessages.map(async (msg) => {
             try {
-              const plaintext = await decryptConversationMessage(conversationId, msg.payload);
+              const plaintext = await decryptConversationMessage(conversationId, msg.payload, msg.senderId);
               return { ...msg, plaintext };
             } catch {
               return { ...msg, plaintext: '[unable to decrypt]' };
@@ -234,7 +243,7 @@ export function useMessages(conversationId, myUserId) {
       // Only handle messages for the currently active conversation
       if (msg.conversationId !== conversationId) return;
       try {
-        const plaintext = await decryptConversationMessage(conversationId, msg.payload);
+        const plaintext = await decryptConversationMessage(conversationId, msg.payload, msg.senderId);
         const decryptedMsg = { ...msg, plaintext };
         appendCachedMessage(conversationId, decryptedMsg);
         if (isMounted.current) {
@@ -273,7 +282,10 @@ export function useMessages(conversationId, myUserId) {
     const onMessageEdited = async ({ conversationId: cid, messageId, payload }) => {
       if (cid !== conversationId) return;
       try {
-        const plaintext = await decryptConversationMessage(conversationId, payload);
+        // Look up the original sender from current messages (only the sender can edit)
+        const originalMsg = messages.find((m) => m.id === messageId);
+        const senderId = originalMsg?.senderId;
+        const plaintext = await decryptConversationMessage(conversationId, payload, senderId);
         updateCachedMessage(conversationId, messageId, (m) => ({ ...m, plaintext, edited: true, payload }));
         if (isMounted.current) {
           setMessages((prev) => prev.map((m) =>
@@ -319,14 +331,66 @@ export function useMessages(conversationId, myUserId) {
     socket.on('messages_expired', onMessagesExpired);
     socket.on('conversation_nuked', onConversationNuked);
 
+    // ── Group sender key socket events ──
+    const groupCryptoDeps = {
+      setupConversationKey,
+      getConversationRootKey,
+      emitSenderKeyDistributed,
+      getMyUserId: () => myUserId,
+    };
+
+    const onSenderKeyDistributed = async ({ conversationId: cid, senderUserId }) => {
+      if (cid !== conversationId) return;
+      if (!isGroupConversation(conversationId)) return;
+      try {
+        await handleSenderKeyDistributed(conversationId, senderUserId, groupCryptoDeps);
+      } catch (err) {
+        console.warn('[useMessages] Failed to handle sender key distributed:', err.message);
+      }
+    };
+
+    const onSenderKeyRequest = async ({ conversationId: cid, requestingUserId }) => {
+      if (cid !== conversationId) return;
+      if (!isGroupConversation(conversationId)) return;
+      try {
+        await handleSenderKeyRequest(conversationId, requestingUserId, groupCryptoDeps);
+      } catch (err) {
+        console.warn('[useMessages] Failed to handle sender key request:', err.message);
+      }
+    };
+
+    const onUserKicked = ({ conversationId: cid, kickedUserId }) => {
+      if (cid !== conversationId) return;
+      // Refresh participants list — dispatched as custom event for ChatWindow to handle
+      window.dispatchEvent(new CustomEvent('blink-user-kicked', {
+        detail: { conversationId: cid, kickedUserId },
+      }));
+    };
+
+    const onConversationExpired = ({ conversationId: cid }) => {
+      if (cid !== conversationId) return;
+      window.dispatchEvent(new CustomEvent('blink-conversation-expired', {
+        detail: { conversationId: cid },
+      }));
+    };
+
+    socket.on('sender_key_distributed', onSenderKeyDistributed);
+    socket.on('sender_key_request', onSenderKeyRequest);
+    socket.on('user_kicked', onUserKicked);
+    socket.on('conversation_expired', onConversationExpired);
+
     return () => {
       socket.off('message', onMessage);
       socket.off('message_deleted', onMessageDeleted);
       socket.off('message_edited', onMessageEdited);
       socket.off('messages_expired', onMessagesExpired);
       socket.off('conversation_nuked', onConversationNuked);
+      socket.off('sender_key_distributed', onSenderKeyDistributed);
+      socket.off('sender_key_request', onSenderKeyRequest);
+      socket.off('user_kicked', onUserKicked);
+      socket.off('conversation_expired', onConversationExpired);
     };
-  }, [conversationId]);
+  }, [conversationId, myUserId]);
 
   // Ensure a conversation key is available, with retries and socket fallback.
   // Returns true if key is available, false if not (message will be queued).

@@ -11,4 +11,6 @@ export type {
   KeyExchangePayload,
   IdentityKeyPair,
   ECDHKeyPair,
+  SenderKeyBundle,
+  EncryptedSenderKey,
 } from './types.js';

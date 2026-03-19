@@ -53,6 +53,28 @@ export interface EncryptedBinaryPayload {
 }
 
 /**
+ * A sender key bundle for group encryption.
+ * Each group member generates their own sender key and distributes it to all
+ * other members via pairwise-encrypted channels.
+ */
+export interface SenderKeyBundle {
+  senderKey: Uint8Array;  // 256-bit AES-GCM key
+  keyGeneration: number;  // increments on rotation
+  signature: string;      // ECDSA signature of (senderKey + keyGeneration + conversationId)
+}
+
+/**
+ * An encrypted copy of a sender key, ready for wire transport.
+ * The sender key is encrypted with the pairwise key between sender and recipient.
+ */
+export interface EncryptedSenderKey {
+  encryptedKey: string;   // base64 AES-GCM ciphertext (sender key encrypted with pairwise key)
+  iv: string;             // base64 12-byte IV
+  keyGeneration: number;
+  signature: string;      // ECDSA signature for authentication
+}
+
+/**
  * Interface that all crypto providers must implement.
  * All methods are async to accommodate both browser (Web Crypto) and Node environments.
  */
@@ -110,4 +132,22 @@ export interface CryptoProvider {
    * Verify an ECDSA P-256 signature.
    */
   verifySignature(publicKeyJwk: JsonWebKey, data: string, signature: string): Promise<boolean>;
+
+  // ── Sender Key methods (group encryption) ──────────────────────────
+
+  /**
+   * Generate a random 256-bit sender key for group encryption.
+   */
+  generateSenderKey(): Promise<Uint8Array>;
+
+  /**
+   * Encrypt a sender key using a pairwise conversation key (for distribution
+   * to another group member). Returns base64 ciphertext + IV.
+   */
+  encryptSenderKey(pairwiseKey: Uint8Array, senderKey: Uint8Array): Promise<{ ciphertext: string; iv: string }>;
+
+  /**
+   * Decrypt a sender key received from a group member.
+   */
+  decryptSenderKey(pairwiseKey: Uint8Array, ciphertext: string, iv: string): Promise<Uint8Array>;
 }

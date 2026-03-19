@@ -140,6 +140,44 @@ export class BrowserProvider implements CryptoProvider {
       new TextEncoder().encode(data) as unknown as BufferSource
     );
   }
+
+  // ── Sender Key methods (group encryption) ──────────────────────────
+
+  async generateSenderKey(): Promise<Uint8Array> {
+    const key = new Uint8Array(32);
+    globalThis.crypto.getRandomValues(key);
+    return key;
+  }
+
+  async encryptSenderKey(pairwiseKey: Uint8Array, senderKey: Uint8Array): Promise<{ ciphertext: string; iv: string }> {
+    const subtle = getSubtle();
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const cryptoKey = await subtle.importKey(
+      'raw', pairwiseKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['encrypt']
+    );
+    const encrypted = await subtle.encrypt(
+      { name: 'AES-GCM', iv: iv as unknown as BufferSource },
+      cryptoKey,
+      senderKey as unknown as BufferSource
+    );
+    return {
+      ciphertext: bufToBase64(encrypted),
+      iv: bufToBase64(iv),
+    };
+  }
+
+  async decryptSenderKey(pairwiseKey: Uint8Array, ciphertext: string, iv: string): Promise<Uint8Array> {
+    const subtle = getSubtle();
+    const cryptoKey = await subtle.importKey(
+      'raw', pairwiseKey as unknown as ArrayBuffer, { name: 'AES-GCM' }, false, ['decrypt']
+    );
+    const decrypted = await subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToBuf(iv) as unknown as BufferSource },
+      cryptoKey,
+      base64ToBuf(ciphertext) as unknown as BufferSource
+    );
+    return new Uint8Array(decrypted);
+  }
 }
 
 export default new BrowserProvider();

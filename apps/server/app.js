@@ -18,6 +18,7 @@ const mediaRoutes = require('./routes/media');
 const reportRoutes = require('./routes/reports');
 const adminRoutes = require('./routes/admin');
 const blockRoutes = require('./routes/blocks');
+const groupKeysRoutes = require('./routes/group-keys');
 const { registerSocketHandlers } = require('./websocket');
 
 const app = express();
@@ -100,6 +101,7 @@ app.use('/api/media', mediaRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/blocks', blockRoutes);
+app.use('/api/group-keys', groupKeysRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 

@@ -82,3 +82,25 @@ export function sendKeyExchange(conversationId, userId, deviceId, ephemeralPubli
 export function sendKeyConfirm(conversationId, confirmToken) {
   if (socket) socket.emit('key_confirm', { conversationId, confirmToken });
 }
+
+/**
+ * Notify group members that we've distributed a new/rotated sender key.
+ */
+export function emitSenderKeyDistributed(conversationId, keyGeneration) {
+  if (socket) {
+    socket.emit('sender_key_distributed', { conversationId, keyGeneration }, (ack) => {
+      if (ack?.error) console.warn('[socket] sender_key_distributed error:', ack.error);
+    });
+  }
+}
+
+/**
+ * Request a specific user to re-distribute their sender key.
+ */
+export function emitSenderKeyRequest(conversationId, targetUserId) {
+  if (socket) {
+    socket.emit('sender_key_request', { conversationId, targetUserId }, (ack) => {
+      if (ack?.error) console.warn('[socket] sender_key_request error:', ack.error);
+    });
+  }
+}

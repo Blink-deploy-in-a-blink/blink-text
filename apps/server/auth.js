@@ -73,4 +73,85 @@ function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
 }
 
-module.exports = { authenticateToken, signToken };
+/**
+ * Signs a short-lived guest JWT (24h).
+ * Guest tokens carry: { guestId, conversationId, displayName, type: 'guest' }
+ */
+function signGuestToken(payload) {
+  return jwt.sign({ ...payload, type: 'guest' }, JWT_SECRET, { expiresIn: '24h' });
+}
+
+/**
+ * Express middleware that authenticates either a registered user JWT or a guest JWT.
+ * Sets req.user with a `type` field ('registered' or 'guest').
+ *
+ * For registered users: same checks as authenticateToken (banned, deleted, nonce).
+ * For guests: checks guest_sessions table, verifies not kicked.
+ */
+function authenticateAnyToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : null;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+
+    const db = require('./db');
+
+    if (decoded.type === 'guest') {
+      // Guest token — validate against guest_sessions
+      const guestSession = db.prepare(
+        'SELECT id, conversation_id, display_name, is_kicked FROM guest_sessions WHERE id = ?'
+      ).get(decoded.guestId);
+
+      if (!guestSession) {
+        return res.status(401).json({ error: 'Guest session not found or expired' });
+      }
+      if (guestSession.is_kicked) {
+        return res.status(403).json({ error: 'You have been removed from this room' });
+      }
+
+      // Update last_seen_at
+      db.prepare('UPDATE guest_sessions SET last_seen_at = ? WHERE id = ?')
+        .run(Date.now(), guestSession.id);
+
+      req.user = {
+        id: guestSession.id,
+        displayName: guestSession.display_name,
+        conversationId: guestSession.conversation_id,
+        type: 'guest',
+      };
+      return next();
+    }
+
+    // Registered user token — same as authenticateToken
+    const dbUser = db.prepare('SELECT is_banned, deleted_at, session_nonce FROM users WHERE id = ?').get(decoded.id);
+    if (!dbUser) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    if (dbUser.is_banned) {
+      return res.status(403).json({ error: 'This account has been suspended' });
+    }
+    if (dbUser.deleted_at) {
+      return res.status(401).json({ error: 'This account has been deleted' });
+    }
+    if (dbUser.session_nonce && decoded.nonce !== dbUser.session_nonce) {
+      return res.status(401).json({
+        error: 'Session expired — you signed in on another device',
+        reason: 'session_expired',
+      });
+    }
+
+    req.user = { ...decoded, type: 'registered' };
+    next();
+  });
+}
+
+module.exports = { authenticateToken, authenticateAnyToken, signToken, signGuestToken };

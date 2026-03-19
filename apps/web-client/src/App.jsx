@@ -3,11 +3,14 @@ import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
 import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
 import { getSocket, joinConversation } from './services/socket.js';
-import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
+import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey, getConversationRootKey } from './services/cryptoService.js';
 import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
 import { verifyAdmin } from './services/api.js';
 import { forwardMessage } from './services/forwardService.js';
+import { isGroupConversation, registerGroupConversation, setupGroupKeys } from './services/groupCrypto.js';
+import { emitSenderKeyDistributed } from './services/socket.js';
+import { isGuest, getGuestSession } from './services/guestSession.js';
 import Login from './components/Login.jsx';
 import Register from './components/Register.jsx';
 import ConversationList from './components/ConversationList.jsx';
@@ -22,6 +25,7 @@ import PrivacyPolicy from './components/PrivacyPolicy.jsx';
 import WelcomePage from './components/WelcomePage.jsx';
 import HelpPage from './components/HelpPage.jsx';
 import SessionExpiredModal from './components/SessionExpiredModal.jsx';
+import JoinRoomPage from './components/JoinRoomPage.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' },
@@ -37,6 +41,14 @@ function useIsMobile() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   return mobile;
+}
+
+// Parse hash route: /#/r/:slug -> { route: 'room', slug }
+function parseHashRoute() {
+  const hash = window.location.hash || '';
+  const roomMatch = hash.match(/^#\/r\/([A-Za-z0-9_-]{4,32})$/);
+  if (roomMatch) return { route: 'room', slug: roomMatch[1] };
+  return { route: 'main' };
 }
 
 function MessengerView({ user, logout, onShowHelp }) {
@@ -142,7 +154,7 @@ function MessengerView({ user, logout, onShowHelp }) {
       incrementUnread(msg.conversationId);
       if (!hasConversationKey(msg.conversationId)) return;
       try {
-        const plaintext = await decryptConversationMessage(msg.conversationId, msg.payload);
+        const plaintext = await decryptConversationMessage(msg.conversationId, msg.payload, msg.senderId);
         appendCachedMessage(msg.conversationId, { ...msg, plaintext });
       } catch (err) {
         console.warn('[global] Failed to decrypt message for', msg.conversationId, err.message);
@@ -225,7 +237,7 @@ function MessengerView({ user, logout, onShowHelp }) {
     };
   }, [activeConversation?.id]);
 
-  const handleSelectConversation = useCallback((conv) => {
+  const handleSelectConversation = useCallback(async (conv) => {
     const names = (conv.participant_usernames || '').split(',').filter((n) => n !== user.username);
     const selected = { ...conv, displayName: conv.name || names.join(', ') || 'Conversation' };
     setActiveConversation(selected);
@@ -234,7 +246,24 @@ function MessengerView({ user, logout, onShowHelp }) {
     setEditingMsg(null);
     // Clear unread count when switching to this conversation
     clearUnread(conv.id);
-  }, [user.username]);
+
+    // For group conversations: ensure sender key is distributed
+    if (conv.type === 'group_chat') {
+      try {
+        if (!isGroupConversation(conv.id)) {
+          registerGroupConversation(conv.id);
+        }
+        const participantIds = (conv.participant_ids || '').split(',').filter(Boolean);
+        await setupGroupKeys(conv.id, user.id, participantIds, {
+          setupConversationKey,
+          getConversationRootKey,
+          emitSenderKeyDistributed,
+        });
+      } catch (err) {
+        console.warn('[group] Sender key setup failed for', conv.id, err.message);
+      }
+    }
+  }, [user.username, user.id]);
 
   const handleNewConversation = (conv) => {
     conversationListRef.current?.refresh();
@@ -395,6 +424,14 @@ export default function App() {
   const { user, login, register, logout, ready, identityError, retryIdentity } = useAuth();
   const [view, setView] = useState('welcome');
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [hashRoute, setHashRoute] = useState(parseHashRoute);
+
+  // Listen for hash changes (e.g. invite links)
+  useEffect(() => {
+    const onHash = () => setHashRoute(parseHashRoute());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   // Listen for session-expired events from the API interceptor or WebSocket
   useEffect(() => {
@@ -413,6 +450,20 @@ export default function App() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: 'var(--bg-primary, #0a0a0a)', color: 'var(--text-muted, #888)' }}>
         Initializing…
       </div>
+    );
+  }
+
+  // Handle /#/r/:slug — room invite link (shown whether logged in or not)
+  if (hashRoute.route === 'room') {
+    return (
+      <JoinRoomPage
+        slug={hashRoute.slug}
+        onJoined={(data) => {
+          // After joining, clear the hash and reload into guest mode or main app
+          window.location.hash = '#/';
+          setHashRoute({ route: 'main' });
+        }}
+      />
     );
   }
 

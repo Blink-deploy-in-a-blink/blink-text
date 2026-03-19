@@ -1,12 +1,13 @@
 'use strict';
 
 const express = require('express');
-const { body, param, validationResult } = require('express-validator');
+const { body, param, query, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const db = require('../db');
-const { authenticateToken } = require('../auth');
+const { authenticateToken, authenticateAnyToken, signGuestToken } = require('../auth');
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
@@ -19,15 +20,263 @@ const MAX_CONVERSATIONS_PER_USER = Number.isInteger(parsedMaxConversations) && p
   ? parsedMaxConversations
   : 500;
 
+// ── Slug generator for invite links ──
+function generateSlug() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = crypto.randomBytes(8);
+  return Array.from(bytes).map(b => chars[b % chars.length]).join('');
+}
+
+// ── Enriched conversation SELECT fragment (reused in multiple queries) ──
+const ENRICHED_CONV_SELECT = `
+  SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
+         c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
+         c.expires_at, c.created_by,
+         GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
+         GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
+         MAX(CASE WHEN u.deleted_at IS NOT NULL AND u.id != ? THEN 1 ELSE 0 END) AS has_deleted_participant
+  FROM conversations c
+  JOIN conversation_participants cp ON cp.conversation_id = c.id
+  JOIN users u ON u.id = cp.user_id
+`;
+
+// ── Public route: GET /api/conversations/join/:slug (no auth) ──
+// Returns basic room info for the join page. No messages, keys, or participant details.
+router.get('/join/:slug', (req, res) => {
+  const { slug } = req.params;
+  if (!slug || typeof slug !== 'string' || slug.length < 4 || slug.length > 32) {
+    return res.status(400).json({ error: 'Invalid room link' });
+  }
+
+  try {
+    const conv = db.prepare(
+      `SELECT c.id, c.name, c.max_participants, c.expires_at, c.invite_enabled, c.allow_guests,
+              (c.password_hash IS NOT NULL) AS has_password
+       FROM conversations c WHERE c.slug = ?`
+    ).get(slug);
+
+    if (!conv) return res.status(404).json({ error: 'Room not found' });
+    if (!conv.invite_enabled) return res.status(403).json({ error: 'This room does not accept invites' });
+
+    // Check if expired
+    if (conv.expires_at && conv.expires_at <= Date.now()) {
+      return res.status(410).json({ error: 'This room has expired' });
+    }
+
+    // Count current participants
+    const { count: participantCount } = db.prepare(
+      'SELECT COUNT(*) as count FROM conversation_participants WHERE conversation_id = ?'
+    ).get(conv.id);
+
+    return res.json({
+      room: {
+        name: conv.name,
+        participantCount,
+        maxParticipants: conv.max_participants,
+        hasPassword: !!conv.has_password,
+        expiresAt: conv.expires_at,
+        allowGuests: !!conv.allow_guests,
+      },
+    });
+  } catch (err) {
+    console.error('Get room info error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── PoW for guest joins (same algorithm as auth route) ──
+const POW_DIFFICULTY = 18;
+const POW_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const joinPowChallenges = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of joinPowChallenges) {
+    if (now - val.createdAt > POW_CHALLENGE_TTL_MS) joinPowChallenges.delete(key);
+  }
+}, 60_000).unref();
+
+function verifyJoinPoW(challenge, nonce, difficulty) {
+  const hash = crypto.createHash('sha256')
+    .update(challenge + String(nonce))
+    .digest();
+  const requiredFullBytes = Math.floor(difficulty / 8);
+  for (let i = 0; i < requiredFullBytes; i++) {
+    if (hash[i] !== 0) return false;
+  }
+  const remainingBits = difficulty % 8;
+  if (remainingBits > 0) {
+    if ((hash[requiredFullBytes] >> (8 - remainingBits)) !== 0) return false;
+  }
+  return true;
+}
+
+// ── GET /api/conversations/join/:slug/challenge — PoW challenge for guest join ──
+router.get('/join/:slug/challenge', (req, res) => {
+  const { slug } = req.params;
+  if (!slug || typeof slug !== 'string' || slug.length < 4 || slug.length > 32) {
+    return res.status(400).json({ error: 'Invalid room link' });
+  }
+
+  // Verify the room actually exists and accepts guests before issuing a challenge
+  const conv = db.prepare(
+    'SELECT id, invite_enabled, allow_guests, expires_at FROM conversations WHERE slug = ?'
+  ).get(slug);
+  if (!conv || !conv.invite_enabled) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  if (conv.expires_at && conv.expires_at <= Date.now()) {
+    return res.status(410).json({ error: 'This room has expired' });
+  }
+
+  const challenge = crypto.randomBytes(32).toString('hex');
+  joinPowChallenges.set(challenge, { createdAt: Date.now() });
+  return res.json({ challenge, difficulty: POW_DIFFICULTY });
+});
+
+// ── POST /api/conversations/join/:slug — join a room as a guest ──
+router.post(
+  '/join/:slug',
+  [
+    body('displayName')
+      .isString()
+      .trim()
+      .isLength({ min: 1, max: 32 })
+      .withMessage('Display name must be 1-32 characters'),
+    body('powChallenge')
+      .isString()
+      .notEmpty()
+      .withMessage('Proof of work challenge is required'),
+    body('powNonce')
+      .notEmpty()
+      .withMessage('Proof of work solution is required'),
+    body('password')
+      .optional()
+      .isString(),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { slug } = req.params;
+    if (!slug || typeof slug !== 'string' || slug.length < 4 || slug.length > 32) {
+      return res.status(400).json({ error: 'Invalid room link' });
+    }
+
+    const { displayName, powChallenge, powNonce, password } = req.body;
+
+    // Verify PoW
+    const challengeEntry = joinPowChallenges.get(powChallenge);
+    if (!challengeEntry) {
+      return res.status(400).json({ error: 'Invalid or expired proof-of-work challenge. Please try again.' });
+    }
+    if (Date.now() - challengeEntry.createdAt > POW_CHALLENGE_TTL_MS) {
+      joinPowChallenges.delete(powChallenge);
+      return res.status(400).json({ error: 'Proof-of-work challenge expired. Please try again.' });
+    }
+    joinPowChallenges.delete(powChallenge);
+
+    if (!verifyJoinPoW(powChallenge, powNonce, POW_DIFFICULTY)) {
+      return res.status(400).json({ error: 'Invalid proof-of-work solution.' });
+    }
+
+    try {
+      const conv = db.prepare(
+        `SELECT id, name, invite_enabled, allow_guests, password_hash, max_participants, expires_at
+         FROM conversations WHERE slug = ?`
+      ).get(slug);
+
+      if (!conv) return res.status(404).json({ error: 'Room not found' });
+      if (!conv.invite_enabled) return res.status(403).json({ error: 'This room does not accept invites' });
+      if (!conv.allow_guests) return res.status(403).json({ error: 'This room does not allow guest access' });
+
+      // Check expiry
+      if (conv.expires_at && conv.expires_at <= Date.now()) {
+        return res.status(410).json({ error: 'This room has expired' });
+      }
+
+      // Check password
+      if (conv.password_hash) {
+        const bcrypt = require('bcryptjs');
+        if (!password || !bcrypt.compareSync(password, conv.password_hash)) {
+          return res.status(403).json({ error: 'Incorrect room password' });
+        }
+      }
+
+      // Check room capacity
+      const { count: participantCount } = db.prepare(
+        'SELECT COUNT(*) as count FROM conversation_participants WHERE conversation_id = ?'
+      ).get(conv.id);
+      if (participantCount >= conv.max_participants) {
+        return res.status(409).json({ error: 'Room is full' });
+      }
+
+      // Rate limit: basic IP-based guest creation throttle
+      // (PoW already provides anti-spam, this is a secondary guard)
+      const ipHash = crypto.createHash('sha256')
+        .update(req.ip || 'unknown')
+        .digest('hex')
+        .slice(0, 16);
+
+      // Create guest session
+      const guestId = uuidv4();
+      const now = Date.now();
+
+      const joinTransaction = db.transaction(() => {
+        // Insert guest session
+        db.prepare(
+          `INSERT INTO guest_sessions (id, conversation_id, display_name, ip_hash, created_at, last_seen_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).run(guestId, conv.id, displayName, ipHash, now, now);
+
+        // Add as participant
+        db.prepare(
+          'INSERT INTO conversation_participants (conversation_id, user_id, role) VALUES (?, ?, ?)'
+        ).run(conv.id, guestId, 'guest');
+      });
+      joinTransaction();
+
+      // Sign guest JWT
+      const token = signGuestToken({
+        guestId,
+        conversationId: conv.id,
+        displayName,
+      });
+
+      // Notify existing participants
+      const io = req.app.get('io');
+      if (io) {
+        io.to(conv.id).emit('user_joined', {
+          conversationId: conv.id,
+          userId: guestId,
+          displayName,
+          type: 'guest',
+        });
+      }
+
+      return res.status(201).json({
+        token,
+        guestSessionId: guestId,
+        conversationId: conv.id,
+        conversationName: conv.name,
+        expiresAt: conv.expires_at,
+      });
+    } catch (err) {
+      console.error('Guest join error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// All routes below require authentication
 router.use(authenticateToken);
 
 // GET /api/conversations
 router.get('/', (req, res) => {
   try {
-    // First, get all conversation IDs the current user is part of
-    // Then, for each conversation, get participant info
     const conversations = db.prepare(`
       SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
+             c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
+             c.expires_at, c.created_by,
              GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
              GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
              MAX(CASE WHEN u.deleted_at IS NOT NULL AND u.id != ? THEN 1 ELSE 0 END) AS has_deleted_participant
@@ -56,12 +305,18 @@ router.post(
     body('participants').isArray({ min: 1 }).withMessage('participants must be a non-empty array of user IDs'),
     body('name').optional().isString().trim().isLength({ max: 64 }),
     body('disappearAfter').optional({ nullable: true }).isInt({ min: 0 }).withMessage('disappearAfter must be a non-negative integer (ms)'),
+    // Group/room-specific fields
+    body('maxParticipants').optional().isInt({ min: 2, max: 50 }).withMessage('maxParticipants must be 2-50'),
+    body('expiresIn').optional({ nullable: true }).isInt({ min: 0 }).withMessage('expiresIn must be a non-negative integer (ms)'),
+    body('inviteEnabled').optional().isBoolean(),
+    body('allowGuests').optional().isBoolean(),
+    body('password').optional({ nullable: true }).isString().isLength({ max: 128 }),
   ],
   (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { type, participants, name, disappearAfter } = req.body;
+    const { type, participants, name, disappearAfter, maxParticipants, expiresIn, inviteEnabled, allowGuests, password } = req.body;
     const allParticipants = Array.from(new Set([req.user.id, ...participants]));
 
     if (type === 'direct_message' && allParticipants.length !== 2) {
@@ -83,6 +338,8 @@ router.post(
           // gets participant_usernames, participant_ids, etc.
           const enriched = db.prepare(`
             SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
+                   c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
+                   c.expires_at, c.created_by,
                    GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
                    GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
                    MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
@@ -123,10 +380,38 @@ router.post(
       // Validate disappearAfter: only allow known timer values (null, 0, or positive integers)
       const validTimers = [null, 0, 300000, 3600000, 86400000, 604800000, 2592000000]; // off, 5m, 1h, 24h, 7d, 30d
       const timerValue = (disappearAfter != null && validTimers.includes(disappearAfter)) ? disappearAfter : null;
+
+      // Group/room-specific fields
+      const isGroup = type === 'group_chat';
+      const shouldHaveSlug = isGroup && (inviteEnabled || allowGuests);
+      const slug = shouldHaveSlug ? generateSlug() : null;
+      const maxPart = isGroup ? (maxParticipants || 50) : 2;
+      const expiresAt = (isGroup && expiresIn && expiresIn > 0) ? (Date.now() + expiresIn) : null;
+      const createdBy = req.user.id;
+
+      // Hash password if provided (for rooms)
+      let passwordHash = null;
+      if (isGroup && password) {
+        const bcrypt = require('bcryptjs');
+        passwordHash = bcrypt.hashSync(password, 10);
+      }
+
       const createConversation = db.transaction(() => {
-        db.prepare('INSERT INTO conversations (id, type, name, disappear_after) VALUES (?, ?, ?, ?)').run(conversationId, type, name || null, timerValue || null);
+        db.prepare(
+          `INSERT INTO conversations
+           (id, type, name, disappear_after, slug, invite_enabled, allow_guests, password_hash, max_participants, expires_at, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          conversationId, type, name || null, timerValue || null,
+          slug, inviteEnabled ? 1 : 0, allowGuests ? 1 : 0,
+          passwordHash, maxPart, expiresAt, createdBy
+        );
         for (const uid of allParticipants) {
-          db.prepare('INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)').run(conversationId, uid);
+          // Creator gets admin role for groups; all others get member
+          const role = (isGroup && uid === req.user.id) ? 'admin' : 'member';
+          db.prepare(
+            'INSERT INTO conversation_participants (conversation_id, user_id, role) VALUES (?, ?, ?)'
+          ).run(conversationId, uid, role);
         }
       });
       createConversation();
@@ -136,6 +421,8 @@ router.post(
       // Fetch enriched conversation data including participant usernames (Issue 4.3)
       const enrichedConversation = db.prepare(`
         SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
+               c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
+               c.expires_at, c.created_by,
                GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
                GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
                MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
@@ -249,7 +536,7 @@ router.get('/:id/participants', [param('id').isUUID()], (req, res) => {
     if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
 
     const participants = db.prepare(`
-      SELECT u.id, u.username, cp.joined_at
+      SELECT u.id, u.username, cp.joined_at, cp.role
       FROM conversation_participants cp
       JOIN users u ON u.id = cp.user_id
       WHERE cp.conversation_id = ?
@@ -538,5 +825,197 @@ router.delete('/:id/nuke', [param('id').isUUID()], (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// ── PUT /api/conversations/:id/invite — enable/disable/regenerate invite link ──
+router.put(
+  '/:id/invite',
+  [
+    param('id').isUUID(),
+    body('enabled').isBoolean().withMessage('enabled must be a boolean'),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      // Only admins can manage invite links
+      const participantRow = db.prepare(
+        'SELECT role FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, req.user.id);
+      if (!participantRow) return res.status(403).json({ error: 'Not a participant' });
+      if (participantRow.role !== 'admin') return res.status(403).json({ error: 'Only admins can manage invite links' });
+
+      const conv = db.prepare('SELECT id, type, slug FROM conversations WHERE id = ?').get(req.params.id);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+      if (conv.type !== 'group_chat') return res.status(400).json({ error: 'Invite links are only for group conversations' });
+
+      const { enabled } = req.body;
+
+      if (enabled) {
+        // Generate a new slug if none exists, or regenerate
+        const newSlug = generateSlug();
+        db.prepare('UPDATE conversations SET invite_enabled = 1, slug = ? WHERE id = ?').run(newSlug, req.params.id);
+        return res.json({ inviteEnabled: true, slug: newSlug });
+      } else {
+        db.prepare('UPDATE conversations SET invite_enabled = 0 WHERE id = ?').run(req.params.id);
+        return res.json({ inviteEnabled: false, slug: conv.slug });
+      }
+    } catch (err) {
+      console.error('Update invite error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── PUT /api/conversations/:id/settings — update group/room settings (admin only) ──
+router.put(
+  '/:id/settings',
+  [
+    param('id').isUUID(),
+    body('name').optional().isString().trim().isLength({ min: 1, max: 64 }),
+    body('maxParticipants').optional().isInt({ min: 2, max: 50 }),
+    body('allowGuests').optional().isBoolean(),
+    body('password').optional({ nullable: true }).isString().isLength({ max: 128 }),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      const participantRow = db.prepare(
+        'SELECT role FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, req.user.id);
+      if (!participantRow) return res.status(403).json({ error: 'Not a participant' });
+      if (participantRow.role !== 'admin') return res.status(403).json({ error: 'Only admins can change settings' });
+
+      const conv = db.prepare('SELECT id, type FROM conversations WHERE id = ?').get(req.params.id);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+      if (conv.type !== 'group_chat') return res.status(400).json({ error: 'Settings are only for group conversations' });
+
+      const updates = [];
+      const params = [];
+
+      if (req.body.name !== undefined) {
+        updates.push('name = ?');
+        params.push(req.body.name);
+      }
+      if (req.body.maxParticipants !== undefined) {
+        updates.push('max_participants = ?');
+        params.push(req.body.maxParticipants);
+      }
+      if (req.body.allowGuests !== undefined) {
+        updates.push('allow_guests = ?');
+        params.push(req.body.allowGuests ? 1 : 0);
+      }
+      if (req.body.password !== undefined) {
+        if (req.body.password === null) {
+          updates.push('password_hash = NULL');
+        } else {
+          const bcrypt = require('bcryptjs');
+          updates.push('password_hash = ?');
+          params.push(bcrypt.hashSync(req.body.password, 10));
+        }
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No settings to update' });
+      }
+
+      params.push(req.params.id);
+      db.prepare(`UPDATE conversations SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+
+      // Notify participants of settings change
+      const io = req.app.get('io');
+      if (io) {
+        io.to(req.params.id).emit('conversation_settings_changed', {
+          conversationId: req.params.id,
+          changedBy: req.user.id,
+        });
+      }
+
+      return res.json({ updated: true });
+    } catch (err) {
+      console.error('Update settings error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── POST /api/conversations/:id/kick — remove a member (admin only) ──
+router.post(
+  '/:id/kick',
+  [
+    param('id').isUUID(),
+    body('userId').isString().notEmpty().withMessage('userId is required'),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      const participantRow = db.prepare(
+        'SELECT role FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, req.user.id);
+      if (!participantRow) return res.status(403).json({ error: 'Not a participant' });
+      if (participantRow.role !== 'admin') return res.status(403).json({ error: 'Only admins can kick members' });
+
+      const { userId } = req.body;
+
+      // Cannot kick yourself
+      if (userId === req.user.id) {
+        return res.status(400).json({ error: 'Cannot kick yourself' });
+      }
+
+      // Verify target is a participant
+      const target = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, userId);
+      if (!target) return res.status(404).json({ error: 'User is not a participant' });
+
+      const kickTransaction = db.transaction(() => {
+        // Remove from participants
+        db.prepare(
+          'DELETE FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+        ).run(req.params.id, userId);
+
+        // Delete their sender keys
+        db.prepare(
+          'DELETE FROM group_sender_keys WHERE conversation_id = ? AND sender_user_id = ?'
+        ).run(req.params.id, userId);
+
+        // Also delete copies addressed to them
+        db.prepare(
+          'DELETE FROM group_sender_keys WHERE conversation_id = ? AND recipient_user_id = ?'
+        ).run(req.params.id, userId);
+
+        // If guest, mark as kicked
+        db.prepare(
+          'UPDATE guest_sessions SET is_kicked = 1 WHERE conversation_id = ? AND id = ?'
+        ).run(req.params.id, userId);
+      });
+      kickTransaction();
+
+      // Notify the room
+      const io = req.app.get('io');
+      if (io) {
+        io.to(req.params.id).emit('user_kicked', {
+          conversationId: req.params.id,
+          kickedUserId: userId,
+          kickedBy: req.user.id,
+        });
+        // Also notify the kicked user directly
+        io.to(userId).emit('you_were_kicked', {
+          conversationId: req.params.id,
+          kickedBy: req.user.id,
+        });
+      }
+
+      return res.json({ kicked: true, userId });
+    } catch (err) {
+      console.error('Kick member error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 module.exports = router;

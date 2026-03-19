@@ -109,6 +109,77 @@ function registerSocketHandlers(io) {
       if (expired.length > 0) {
         console.log(`[expiry] Cleaned up ${expired.length} expired message(s)`);
       }
+
+      // ── Conversation expiry: clean up expired rooms/groups ──
+      const expiredConvs = db.prepare(
+        "SELECT id FROM conversations WHERE expires_at IS NOT NULL AND expires_at <= ?"
+      ).all(now);
+
+      if (expiredConvs.length > 0) {
+        const deleteConvMessages = db.prepare('DELETE FROM messages WHERE conversation_id = ?');
+        const deleteConvParticipants = db.prepare('DELETE FROM conversation_participants WHERE conversation_id = ?');
+        const deleteConvSenderKeys = db.prepare('DELETE FROM group_sender_keys WHERE conversation_id = ?');
+        const deleteConvGuestSessions = db.prepare('DELETE FROM guest_sessions WHERE conversation_id = ?');
+        const deleteConv = db.prepare('DELETE FROM conversations WHERE id = ?');
+
+        const convCleanupTx = db.transaction(() => {
+          for (const conv of expiredConvs) {
+            // Clean up media files for this conversation's messages
+            const mediaMessages = db.prepare(
+              'SELECT m.media_id FROM messages m WHERE m.conversation_id = ? AND m.media_id IS NOT NULL'
+            ).all(conv.id);
+            for (const mm of mediaMessages) {
+              try {
+                const media = db.prepare('SELECT file_path FROM media WHERE id = ?').get(mm.media_id);
+                if (media) {
+                  const filePath = path.join(UPLOADS_DIR, media.file_path);
+                  try { fs.unlinkSync(filePath); } catch (_e) { /* best-effort */ }
+                  db.prepare('DELETE FROM media WHERE id = ?').run(mm.media_id);
+                }
+              } catch (_e) { /* continue */ }
+            }
+
+            deleteConvMessages.run(conv.id);
+            deleteConvSenderKeys.run(conv.id);
+            deleteConvGuestSessions.run(conv.id);
+            deleteConvParticipants.run(conv.id);
+            deleteConv.run(conv.id);
+
+            // Notify connected clients that the conversation has expired
+            io.to(conv.id).emit('conversation_expired', { conversationId: conv.id });
+          }
+        });
+        convCleanupTx();
+
+        console.log(`[expiry] Cleaned up ${expiredConvs.length} expired conversation(s)`);
+      }
+
+      // ── Stale guest session cleanup: remove guests not seen for 24h ──
+      const GUEST_STALE_MS = 24 * 60 * 60 * 1000;
+      const staleGuests = db.prepare(
+        'SELECT id, conversation_id FROM guest_sessions WHERE last_seen_at < ? AND is_kicked = 0'
+      ).all(now - GUEST_STALE_MS);
+
+      if (staleGuests.length > 0) {
+        const deleteGuestSession = db.prepare('DELETE FROM guest_sessions WHERE id = ?');
+        const deleteGuestParticipant = db.prepare(
+          'DELETE FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+        );
+        const deleteGuestSenderKeys = db.prepare(
+          'DELETE FROM group_sender_keys WHERE conversation_id = ? AND (sender_user_id = ? OR recipient_user_id = ?)'
+        );
+
+        const guestCleanupTx = db.transaction(() => {
+          for (const guest of staleGuests) {
+            deleteGuestSenderKeys.run(guest.conversation_id, guest.id, guest.id);
+            deleteGuestParticipant.run(guest.conversation_id, guest.id);
+            deleteGuestSession.run(guest.id);
+          }
+        });
+        guestCleanupTx();
+
+        console.log(`[expiry] Cleaned up ${staleGuests.length} stale guest session(s)`);
+      }
     } catch (err) {
       console.error('[expiry] Cleanup error:', err);
     }
@@ -118,32 +189,61 @@ function registerSocketHandlers(io) {
   io.use((socket, next) => {
     const token = socket.handshake.auth && socket.handshake.auth.token;
     if (!token) return next(new Error('Authentication token required'));
-    jwt.verify(token, JWT_SECRET, (err, user) => {
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
       if (err) return next(new Error('Invalid or expired token'));
 
+      // ── Guest token ──
+      if (decoded.type === 'guest') {
+        const guestSession = db.prepare(
+          'SELECT id, conversation_id, display_name, is_kicked FROM guest_sessions WHERE id = ?'
+        ).get(decoded.guestId);
+
+        if (!guestSession) return next(new Error('Guest session not found'));
+        if (guestSession.is_kicked) return next(new Error('You have been removed from this room'));
+
+        // Update last_seen
+        db.prepare('UPDATE guest_sessions SET last_seen_at = ? WHERE id = ?')
+          .run(Date.now(), guestSession.id);
+
+        socket.user = {
+          id: guestSession.id,
+          username: guestSession.display_name,
+          displayName: guestSession.display_name,
+          conversationId: guestSession.conversation_id,
+          type: 'guest',
+        };
+        return next();
+      }
+
+      // ── Registered user token ──
       // Check ban/deletion status in DB so bans take effect immediately,
       // even if the JWT hasn't expired yet.
-      const dbUser = db.prepare('SELECT is_banned, deleted_at, session_nonce FROM users WHERE id = ?').get(user.id);
+      const dbUser = db.prepare('SELECT is_banned, deleted_at, session_nonce FROM users WHERE id = ?').get(decoded.id);
       if (!dbUser) return next(new Error('User not found'));
       if (dbUser.is_banned) return next(new Error('Account suspended'));
       if (dbUser.deleted_at) return next(new Error('Account deleted'));
 
       // Single-session enforcement: reject if nonce doesn't match
-      if (dbUser.session_nonce && user.nonce !== dbUser.session_nonce) {
+      if (dbUser.session_nonce && decoded.nonce !== dbUser.session_nonce) {
         return next(new Error('session_expired'));
       }
 
-      socket.user = user;
+      socket.user = { ...decoded, type: 'registered' };
       next();
     });
   });
 
   io.on('connection', (socket) => {
-    const { id: userId, username } = socket.user;
-    console.log(`[WS] User connected: ${username} (${userId})`);
+    const { id: userId, username, type: userType } = socket.user;
+    console.log(`[WS] ${userType === 'guest' ? 'Guest' : 'User'} connected: ${username} (${userId})`);
 
     // Join a personal room so we can send events directly to this user
     socket.join(userId);
+
+    // Guests auto-join their specific conversation room only
+    if (userType === 'guest' && socket.user.conversationId) {
+      socket.join(socket.user.conversationId);
+    }
 
     // Emit presence events only to users who share at least one conversation (Issue 5.1)
     const peers = db.prepare(`
@@ -157,6 +257,12 @@ function registerSocketHandlers(io) {
 
     socket.on('join_conversation', ({ conversationId }) => {
       if (!conversationId || typeof conversationId !== 'string') return;
+
+      // Guests can only join their assigned conversation
+      if (userType === 'guest' && conversationId !== socket.user.conversationId) {
+        socket.emit('error', { message: 'Guests can only join their assigned room' });
+        return;
+      }
 
       const participant = db.prepare(
         'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
@@ -328,6 +434,67 @@ function registerSocketHandlers(io) {
       });
     });
 
+    // ── sender_key_distributed: notify group members that new sender keys are available ──
+    socket.on('sender_key_distributed', (payload, ack) => {
+      if (!payload || typeof payload !== 'object') {
+        if (typeof ack === 'function') ack({ error: 'Invalid payload' });
+        return;
+      }
+      const { conversationId, keyGeneration } = payload;
+      if (!conversationId || typeof conversationId !== 'string') {
+        if (typeof ack === 'function') ack({ error: 'Missing conversationId' });
+        return;
+      }
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+      if (!participant) {
+        if (typeof ack === 'function') ack({ error: 'Not a participant' });
+        return;
+      }
+
+      // Relay to all other members in the room
+      socket.to(conversationId).emit('sender_key_distributed', {
+        conversationId,
+        senderUserId: userId,
+        keyGeneration: keyGeneration || 0,
+      });
+      if (typeof ack === 'function') ack({ success: true });
+    });
+
+    // ── sender_key_request: ask a specific user to re-distribute their sender key ──
+    socket.on('sender_key_request', (payload, ack) => {
+      if (!payload || typeof payload !== 'object') {
+        if (typeof ack === 'function') ack({ error: 'Invalid payload' });
+        return;
+      }
+      const { conversationId, targetUserId } = payload;
+      if (!conversationId || typeof conversationId !== 'string') {
+        if (typeof ack === 'function') ack({ error: 'Missing conversationId' });
+        return;
+      }
+      if (!targetUserId || typeof targetUserId !== 'string') {
+        if (typeof ack === 'function') ack({ error: 'Missing targetUserId' });
+        return;
+      }
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+      if (!participant) {
+        if (typeof ack === 'function') ack({ error: 'Not a participant' });
+        return;
+      }
+
+      // Send directly to the target user
+      io.to(targetUserId).emit('sender_key_request', {
+        conversationId,
+        requestingUserId: userId,
+      });
+      if (typeof ack === 'function') ack({ success: true });
+    });
+
     socket.on('edit_message', ({ conversationId, messageId, payload: encPayload }, ack) => {
       if (!wsRateCheck(userId)) {
         if (typeof ack === 'function') ack({ error: 'Rate limit exceeded. Please slow down.' });
@@ -437,7 +604,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('disconnect', () => {
-      console.log(`[WS] User disconnected: ${username} (${userId})`);
+      console.log(`[WS] ${userType === 'guest' ? 'Guest' : 'User'} disconnected: ${username} (${userId})`);
       // Emit disconnect only to conversation peers (Issue 5.1)
       const disconnectPeers = db.prepare(`
         SELECT DISTINCT cp2.user_id FROM conversation_participants cp1

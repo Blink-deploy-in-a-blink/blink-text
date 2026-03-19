@@ -72,8 +72,8 @@ export const login = (username, password) =>
 export const getConversations = () =>
   api.get('/api/conversations').then((r) => r.data.conversations);
 
-export const createConversation = (type, participants, name, disappearAfter) =>
-  api.post('/api/conversations', { type, participants, name, disappearAfter }).then((r) => r.data.conversation);
+export const createConversation = (type, participants, name, disappearAfter, groupOptions = {}) =>
+  api.post('/api/conversations', { type, participants, name, disappearAfter, ...groupOptions }).then((r) => r.data.conversation);
 
 export const getMessages = (conversationId, { limit, before } = {}) => {
   const params = {};
@@ -240,3 +240,28 @@ export const updateConversationTimer = (conversationId, disappearAfter) =>
  */
 export const nukeChat = (conversationId) =>
   api.delete(`/api/conversations/${conversationId}/nuke`).then((r) => r.data);
+
+// ── Group sender keys ──
+
+export const getSenderKeys = (conversationId) =>
+  api.get(`/api/group-keys/${conversationId}`).then((r) => r.data);
+
+export const storeSenderKeys = (conversationId, keys) =>
+  api.post(`/api/group-keys/${conversationId}`, { keys }).then((r) => r.data);
+
+export const deleteSenderKeys = (conversationId, senderUserId) =>
+  api.delete(`/api/group-keys/${conversationId}/${senderUserId}`).then((r) => r.data);
+
+// ── Invite / Room management ──
+
+export const getConversationBySlug = (slug) =>
+  api.get(`/api/conversations/join/${slug}`).then((r) => r.data);
+
+export const updateInviteSettings = (conversationId, enabled) =>
+  api.put(`/api/conversations/${conversationId}/invite`, { enabled }).then((r) => r.data);
+
+export const updateConversationSettings = (conversationId, settings) =>
+  api.put(`/api/conversations/${conversationId}/settings`, settings).then((r) => r.data);
+
+export const kickMember = (conversationId, userId) =>
+  api.post(`/api/conversations/${conversationId}/kick`, { userId }).then((r) => r.data);

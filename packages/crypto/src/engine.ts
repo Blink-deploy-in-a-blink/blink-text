@@ -49,6 +49,20 @@ export class CryptoEngine {
     return this.provider.verifySignature(publicKeyJwk, data, signature);
   }
 
+  // ── Sender Key methods (group encryption) ──────────────────────────
+
+  generateSenderKey(): Promise<Uint8Array> {
+    return this.provider.generateSenderKey();
+  }
+
+  encryptSenderKey(pairwiseKey: Uint8Array, senderKey: Uint8Array): Promise<{ ciphertext: string; iv: string }> {
+    return this.provider.encryptSenderKey(pairwiseKey, senderKey);
+  }
+
+  decryptSenderKey(pairwiseKey: Uint8Array, ciphertext: string, iv: string): Promise<Uint8Array> {
+    return this.provider.decryptSenderKey(pairwiseKey, ciphertext, iv);
+  }
+
   /**
    * Full ECDH key exchange: derive a shared secret then derive the conversation key in one step.
    */

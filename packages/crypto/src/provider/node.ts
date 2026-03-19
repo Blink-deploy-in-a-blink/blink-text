@@ -111,6 +111,37 @@ export class NodeProvider implements CryptoProvider {
       Buffer.from(signature, 'base64')
     );
   }
+
+  // ── Sender Key methods (group encryption) ──────────────────────────
+
+  async generateSenderKey(): Promise<Uint8Array> {
+    return new Uint8Array(nodeCrypto.randomBytes(32));
+  }
+
+  async encryptSenderKey(pairwiseKey: Uint8Array, senderKey: Uint8Array): Promise<{ ciphertext: string; iv: string }> {
+    const keyBuf = Buffer.from(pairwiseKey);
+    const iv = nodeCrypto.randomBytes(12);
+    const cipher = nodeCrypto.createCipheriv('aes-256-gcm', keyBuf, iv);
+    const encrypted = Buffer.concat([cipher.update(Buffer.from(senderKey)), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    // Append 16-byte GCM auth tag after ciphertext, matching Web Crypto API's behavior.
+    const combined = Buffer.concat([encrypted, tag]);
+    return {
+      ciphertext: combined.toString('base64'),
+      iv: iv.toString('base64'),
+    };
+  }
+
+  async decryptSenderKey(pairwiseKey: Uint8Array, ciphertext: string, iv: string): Promise<Uint8Array> {
+    const keyBuf = Buffer.from(pairwiseKey);
+    const ivBuf = Buffer.from(iv, 'base64');
+    const combined = Buffer.from(ciphertext, 'base64');
+    const tag = combined.subarray(combined.length - 16);
+    const encrypted = combined.subarray(0, combined.length - 16);
+    const decipher = nodeCrypto.createDecipheriv('aes-256-gcm', keyBuf, ivBuf);
+    decipher.setAuthTag(tag);
+    return new Uint8Array(Buffer.concat([decipher.update(encrypted), decipher.final()]));
+  }
 }
 
 export default new NodeProvider();

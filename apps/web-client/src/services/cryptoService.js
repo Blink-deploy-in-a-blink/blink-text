@@ -19,6 +19,14 @@
 import { CryptoEngine, BrowserProvider } from '@blink-text/crypto';
 import { registerDevice, storeKeyExchange, getKeyExchange } from './api.js';
 import { sendKeyExchange, sendKeyConfirm, joinConversation } from './socket.js';
+import {
+  isGroupConversation,
+  encryptGroupMessage,
+  decryptGroupMessage,
+  encryptGroupMedia,
+  decryptGroupMedia,
+  clearAllGroupKeys,
+} from './groupCrypto.js';
 
 // Engine backed by browser Web Crypto API
 const engine = new CryptoEngine(new BrowserProvider());
@@ -698,10 +706,15 @@ async function _deriveAndStore(conversationId, myPrivateKey, theirPublicKey) {
 
 /**
  * Encrypt a plaintext message for a given conversation.
+ * Routes to group crypto for group_chat conversations.
  * Uses the symmetric chain ratchet to derive a unique message key.
  * Returns an EncryptedPayload with an added `chainIdx` field.
  */
 export async function encryptForConversation(conversationId, plaintext) {
+  if (isGroupConversation(conversationId)) {
+    return encryptGroupMessage(conversationId, plaintext);
+  }
+
   const entry = conversationKeys.get(conversationId);
   if (!entry) throw new Error(`No conversation key for ${conversationId}. Run setupConversationKey first.`);
 
@@ -717,6 +730,10 @@ export async function encryptForConversation(conversationId, plaintext) {
  * Returns { encrypted: Uint8Array, iv: Uint8Array }.
  */
 export async function encryptMediaForConversation(conversationId, data) {
+  if (isGroupConversation(conversationId)) {
+    return encryptGroupMedia(conversationId, data);
+  }
+
   const entry = conversationKeys.get(conversationId);
   if (!entry) throw new Error(`No conversation key for ${conversationId}. Run setupConversationKey first.`);
   // Media uses the root key directly (same as v1) for simplicity —
@@ -728,7 +745,11 @@ export async function encryptMediaForConversation(conversationId, data) {
 /**
  * Decrypt binary media data for a given conversation.
  */
-export async function decryptMediaForConversation(conversationId, encrypted, iv) {
+export async function decryptMediaForConversation(conversationId, encrypted, iv, senderUserId) {
+  if (isGroupConversation(conversationId) && senderUserId) {
+    return decryptGroupMedia(conversationId, senderUserId, encrypted, iv);
+  }
+
   const entry = conversationKeys.get(conversationId);
   if (!entry) throw new Error(`No conversation key for ${conversationId}`);
   return engine.decryptBinary(entry.rootKey, { encrypted, iv });
@@ -736,9 +757,14 @@ export async function decryptMediaForConversation(conversationId, encrypted, iv)
 
 /**
  * Decrypt an incoming EncryptedMessage payload.
+ * Routes to group crypto if the conversation is a group_chat.
  * Supports both v1 (no chainIdx, uses root key directly) and v2 (chain ratchet).
  */
-export async function decryptConversationMessage(conversationId, encryptedPayload) {
+export async function decryptConversationMessage(conversationId, encryptedPayload, senderUserId) {
+  if (isGroupConversation(conversationId) && senderUserId) {
+    return decryptGroupMessage(conversationId, senderUserId, encryptedPayload);
+  }
+
   const entry = conversationKeys.get(conversationId);
   if (!entry) throw new Error(`No conversation key for ${conversationId}`);
 
@@ -756,6 +782,15 @@ export async function decryptConversationMessage(conversationId, encryptedPayloa
 
 export function hasConversationKey(conversationId) {
   return conversationKeys.has(conversationId);
+}
+
+/**
+ * Get the root key for a conversation (used by groupCrypto for pairwise channels).
+ * Returns Uint8Array or null.
+ */
+export function getConversationRootKey(conversationId) {
+  const entry = conversationKeys.get(conversationId);
+  return entry ? entry.rootKey : null;
 }
 
 export function getDeviceId() {
@@ -781,6 +816,9 @@ export async function clearAllCryptoKeys() {
   ecdhKeypair = null;
   deviceId = null;
   localStorage.removeItem('blink-device-id');
+
+  // Clear group crypto state
+  await clearAllGroupKeys();
 
   // Delete all ephemeral keys from IndexedDB so re-login gets fresh keypairs.
   // Preserve identity + ECDH keys (blink-identity-key, blink-ecdh-key).

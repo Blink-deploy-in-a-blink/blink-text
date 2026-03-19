@@ -126,6 +126,35 @@ if (!convColumns.includes('disappear_after')) {
   db.exec("ALTER TABLE conversations ADD COLUMN disappear_after INTEGER DEFAULT NULL");
 }
 
+// ── Group / Room unified columns on conversations ──
+if (!convColumns.includes('slug')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN slug TEXT DEFAULT NULL");
+}
+if (!convColumns.includes('invite_enabled')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN invite_enabled INTEGER NOT NULL DEFAULT 0");
+}
+if (!convColumns.includes('allow_guests')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN allow_guests INTEGER NOT NULL DEFAULT 0");
+}
+if (!convColumns.includes('password_hash')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN password_hash TEXT DEFAULT NULL");
+}
+if (!convColumns.includes('max_participants')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN max_participants INTEGER NOT NULL DEFAULT 50");
+}
+if (!convColumns.includes('expires_at')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN expires_at INTEGER DEFAULT NULL");
+}
+if (!convColumns.includes('created_by')) {
+  db.exec("ALTER TABLE conversations ADD COLUMN created_by TEXT DEFAULT NULL");
+}
+
+// ── Participant roles (admin / member) ──
+const cpColumns = db.prepare("PRAGMA table_info(conversation_participants)").all().map(c => c.name);
+if (!cpColumns.includes('role')) {
+  db.exec("ALTER TABLE conversation_participants ADD COLUMN role TEXT NOT NULL DEFAULT 'member'");
+}
+
 // Session nonce for single-session enforcement.
 // Each login generates a fresh nonce stored in the DB and embedded in the JWT.
 // Every authenticated request checks that the JWT's nonce matches the DB.
@@ -187,6 +216,50 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_unique_pending
   ON reports(reporter_id, reported_user_id)
   WHERE status = 'pending';
+`);
+
+// ── Group sender keys: encrypted sender key copies for group E2E encryption ──
+db.exec(`
+  CREATE TABLE IF NOT EXISTS group_sender_keys (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender_user_id TEXT NOT NULL,
+    recipient_user_id TEXT NOT NULL,
+    encrypted_sender_key TEXT NOT NULL,
+    iv TEXT NOT NULL,
+    key_generation INTEGER NOT NULL DEFAULT 0,
+    signature TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_gsk_recipient
+    ON group_sender_keys(conversation_id, recipient_user_id);
+  CREATE INDEX IF NOT EXISTS idx_gsk_sender
+    ON group_sender_keys(conversation_id, sender_user_id, key_generation);
+`);
+
+// ── Guest sessions for burner rooms (no-account users) ──
+db.exec(`
+  CREATE TABLE IF NOT EXISTS guest_sessions (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    display_name TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    ip_hash TEXT,
+    pow_nonce TEXT,
+    is_kicked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    last_seen_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_guest_sessions_conversation
+    ON guest_sessions(conversation_id);
+`);
+
+// Unique index on conversation slug for fast public lookups
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_slug
+    ON conversations(slug) WHERE slug IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_conversations_expires
+    ON conversations(expires_at) WHERE expires_at IS NOT NULL;
 `);
 
 module.exports = db;

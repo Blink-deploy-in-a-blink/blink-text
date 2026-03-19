@@ -1,6 +1,7 @@
 import { useState, useEffect, useImperativeHandle, forwardRef, useRef, useCallback } from 'react';
 import { getConversations, changePassword, deleteAccount, blockUser, unblockUser, getBlocks, checkBlocked, clearChat, nukeChat, submitReport } from '../services/api.js';
 import { getSocket, connectSocket } from '../services/socket.js';
+import { registerGroupConversation } from '../services/groupCrypto.js';
 
 /* ── tiny SVG icons ── */
 const ChatIcon = () => (
@@ -166,6 +167,10 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
     try {
       const data = await getConversations();
       setConversations(data || []);
+      // Register group conversations so crypto routing works
+      for (const conv of (data || [])) {
+        if (conv.type === 'group_chat') registerGroupConversation(conv.id);
+      }
     } catch {
       // ignore
     } finally {
@@ -418,6 +423,11 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ ...s.name, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                {conv.type === 'group_chat' && (
+                  <span title="Group" style={{ display: 'inline-flex', color: 'var(--text-muted)', flexShrink: 0 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                  </span>
+                )}
                 {getDisplayName(conv)}
                 {conv.disappear_after && (
                   <span title="Auto-delete enabled" style={{ display: 'inline-flex', color: 'var(--accent)', flexShrink: 0, opacity: 0.7 }}>
@@ -443,7 +453,12 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
                 </span>
               )}
             </div>
-            <div style={s.sub}>{conv.type === 'direct_message' ? 'Direct' : 'Group'}</div>
+            <div style={s.sub}>
+              {conv.type === 'direct_message' ? 'Direct' : (() => {
+                const count = (conv.participant_ids || '').split(',').filter(Boolean).length;
+                return `Group \u00b7 ${count} member${count !== 1 ? 's' : ''}`;
+              })()}
+            </div>
           </div>
         ))}
       </div>
@@ -715,6 +730,18 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
               </button>
             );
           })()}
+          {ctxMenu.conv.type === 'group_chat' && ctxMenu.conv.slug && (
+            <button style={s.ctxItem}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              onClick={() => {
+                navigator.clipboard.writeText(`${window.location.origin}/#/r/${ctxMenu.conv.slug}`);
+                setCtxMenu(null);
+              }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              Copy Invite Link
+            </button>
+          )}
           <button style={s.ctxItem}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-active)')}
             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}

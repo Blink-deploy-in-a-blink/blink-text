@@ -62,7 +62,7 @@ async function preloadConversation(conv, userId) {
     const decrypted = await Promise.all(
       rawMessages.map(async (msg) => {
         try {
-          const plaintext = await decryptConversationMessage(conv.id, msg.payload);
+          const plaintext = await decryptConversationMessage(conv.id, msg.payload, msg.senderId);
           return { ...msg, plaintext };
         } catch {
           return { ...msg, plaintext: '[unable to decrypt]' };
