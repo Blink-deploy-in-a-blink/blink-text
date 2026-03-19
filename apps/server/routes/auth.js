@@ -285,6 +285,19 @@ router.put(
       const newNonce = crypto.randomBytes(16).toString('hex');
       db.prepare('UPDATE users SET session_nonce = ? WHERE id = ?').run(newNonce, req.user.id);
 
+      // Disconnect any existing WebSocket connections for this user so stolen
+      // sessions can't continue communicating over an already-established socket.
+      const io = req.app.get('io');
+      if (io) {
+        const room = io.sockets.adapter.rooms.get(req.user.id);
+        if (room) {
+          for (const socketId of room) {
+            const s = io.sockets.sockets.get(socketId);
+            if (s) s.disconnect(true);
+          }
+        }
+      }
+
       const newToken = signToken({ id: req.user.id, username: user.username, nonce: newNonce });
       return res.json({ message: 'Password changed successfully', token: newToken });
     } catch (err) {

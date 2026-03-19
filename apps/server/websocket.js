@@ -167,7 +167,8 @@ function registerSocketHandlers(io) {
         let messageId;
         const clientId = msg && typeof msg.id === 'string' ? msg.id : null;
         if (clientId && uuidValidate(clientId)) {
-          const existing = db.prepare('SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?').get(clientId, conversationId);
+          // messages.id is a global primary key — check across all conversations
+          const existing = db.prepare('SELECT 1 FROM messages WHERE id = ?').get(clientId);
           messageId = existing ? uuidv4() : clientId;
         } else {
           messageId = uuidv4();

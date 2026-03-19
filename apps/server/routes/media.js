@@ -8,9 +8,6 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { authenticateToken } = require('../auth');
 
-// Ensure an index exists for efficient per-user quota checks (SUM(file_size) WHERE sender_id = ?)
-db.prepare('CREATE INDEX IF NOT EXISTS idx_media_sender_id ON media(sender_id)').run();
-
 const router = express.Router();
 router.use(authenticateToken);
 

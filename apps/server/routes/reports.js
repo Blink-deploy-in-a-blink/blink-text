@@ -8,9 +8,6 @@ const { authenticateToken } = require('../auth');
 
 const router = express.Router();
 
-// Ensure an index exists for efficient reporter-based rate-limit queries
-db.prepare('CREATE INDEX IF NOT EXISTS idx_reports_reporter_created ON reports(reporter_id, created_at)').run();
-
 const VALID_REASONS = ['spam', 'harassment', 'illegal_content', 'impersonation', 'other'];
 
 const MAX_REPORTS_PER_USER_PER_HOUR = 5;
@@ -100,6 +97,11 @@ router.post(
 
       return res.status(201).json({ message: 'Report submitted', reportId: id });
     } catch (err) {
+      // Handle race where another request created a pending report concurrently
+      // (unique partial index idx_reports_unique_pending enforces this at the DB level)
+      if (err && typeof err.message === 'string' && err.message.includes('UNIQUE constraint failed')) {
+        return res.status(409).json({ error: 'You already have a pending report against this user' });
+      }
       console.error('Report submission error:', err);
       return res.status(500).json({ error: 'Internal server error' });
     }

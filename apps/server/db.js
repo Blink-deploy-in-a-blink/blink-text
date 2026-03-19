@@ -163,4 +163,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON user_blocks(blocked_id);
 `);
 
+// Performance indexes for rate-limit and quota queries
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_media_sender_id ON media(sender_id);
+  CREATE INDEX IF NOT EXISTS idx_reports_reporter_created ON reports(reporter_id, created_at);
+`);
+
+// Enforce at most one pending report per (reporter, reported_user) pair at the DB level
+// This makes the dedup check atomic — even concurrent requests can't create duplicates.
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_unique_pending
+  ON reports(reporter_id, reported_user_id)
+  WHERE status = 'pending';
+`);
+
 module.exports = db;

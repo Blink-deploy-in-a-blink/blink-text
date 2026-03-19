@@ -1,6 +1,6 @@
 import { useState, useEffect, useImperativeHandle, forwardRef, useRef, useCallback } from 'react';
 import { getConversations, changePassword, deleteAccount, blockUser, unblockUser, getBlocks, checkBlocked, clearChat, submitReport } from '../services/api.js';
-import { getSocket } from '../services/socket.js';
+import { getSocket, connectSocket } from '../services/socket.js';
 
 /* ── tiny SVG icons ── */
 const ChatIcon = () => (
@@ -242,6 +242,8 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
       // Server regenerates session nonce on password change — save the fresh token
       if (result?.token) {
         localStorage.setItem('blink-token', result.token);
+        // Reconnect Socket.io with the new token so the WS session uses the fresh nonce
+        connectSocket(result.token);
       }
       setPwMsg({ type: 'success', text: 'Password changed!' });
       setCurrentPw('');
