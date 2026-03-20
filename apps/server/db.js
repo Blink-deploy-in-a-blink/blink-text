@@ -268,7 +268,7 @@ db.exec(`
   const cpSchema = db.prepare(
     "SELECT sql FROM sqlite_master WHERE name = 'conversation_participants' AND type = 'table'"
   ).get();
-  if (cpSchema && cpSchema.sql && cpSchema.sql.includes('REFERENCES users')) {
+  if (cpSchema && cpSchema.sql && /user_id[^,]*REFERENCES\s+users/i.test(cpSchema.sql)) {
     db.pragma('foreign_keys = OFF');
     db.exec(`
       CREATE TABLE conversation_participants_new (

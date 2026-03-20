@@ -558,7 +558,7 @@ router.get('/:id/participants', [param('id').isUUID()], (req, res) => {
     const participants = db.prepare(`
       SELECT cp.user_id AS id, COALESCE(u.username, g.display_name, 'Unknown') AS username,
              cp.joined_at, cp.role,
-             CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END AS is_guest
+             CASE WHEN u.id IS NULL AND g.id IS NOT NULL THEN 1 ELSE 0 END AS is_guest
       FROM conversation_participants cp
       LEFT JOIN users u ON u.id = cp.user_id
       LEFT JOIN guest_sessions g ON g.id = cp.user_id

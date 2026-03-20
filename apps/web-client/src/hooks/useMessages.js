@@ -369,8 +369,9 @@ export function useMessages(conversationId, myUserId) {
       // Rotate sender keys so the kicked member can no longer decrypt future messages
       if (isGroupConversation(conversationId) && kickedUserId !== myUserId) {
         try {
+          // Server already removed the kicked user; fetch fresh participant list
           const participants = await getParticipants(conversationId);
-          const remainingIds = participants.map(p => p.id).filter(id => id !== kickedUserId);
+          const remainingIds = participants.map(p => p.id);
           await rotateMySenderKey(conversationId, myUserId, remainingIds, { emitSenderKeyDistributed });
         } catch (err) {
           console.warn('[useMessages] Failed to rotate sender key after kick:', err.message);
