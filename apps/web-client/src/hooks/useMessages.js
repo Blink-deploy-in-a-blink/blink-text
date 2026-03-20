@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { getMessages, deleteMessage as apiDeleteMessage, uploadMedia } from '../services/api.js';
+import { getMessages, deleteMessage as apiDeleteMessage, uploadMedia, getParticipants } from '../services/api.js';
 import { getSocket, joinConversation, leaveConversation, sendMessage } from '../services/socket.js';
 import {
   setupConversationKey,
@@ -15,6 +15,7 @@ import {
   handleSenderKeyRequest,
   setupGroupKeys,
   hasGroupKeys,
+  rotateMySenderKey,
 } from '../services/groupCrypto.js';
 import { emitSenderKeyDistributed } from '../services/socket.js';
 import {
@@ -363,8 +364,18 @@ export function useMessages(conversationId, myUserId) {
       }
     };
 
-    const onUserKicked = ({ conversationId: cid, kickedUserId }) => {
+    const onUserKicked = async ({ conversationId: cid, kickedUserId }) => {
       if (cid !== conversationId) return;
+      // Rotate sender keys so the kicked member can no longer decrypt future messages
+      if (isGroupConversation(conversationId) && kickedUserId !== myUserId) {
+        try {
+          const participants = await getParticipants(conversationId);
+          const remainingIds = participants.map(p => p.id).filter(id => id !== kickedUserId);
+          await rotateMySenderKey(conversationId, myUserId, remainingIds, { emitSenderKeyDistributed });
+        } catch (err) {
+          console.warn('[useMessages] Failed to rotate sender key after kick:', err.message);
+        }
+      }
       // Refresh participants list — dispatched as custom event for ChatWindow to handle
       window.dispatchEvent(new CustomEvent('blink-user-kicked', {
         detail: { conversationId: cid, kickedUserId },

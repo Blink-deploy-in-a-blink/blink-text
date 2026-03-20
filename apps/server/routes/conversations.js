@@ -32,12 +32,17 @@ const ENRICHED_CONV_SELECT = `
   SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
          c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
          c.expires_at, c.created_by,
-         GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
-         GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
+         GROUP_CONCAT(DISTINCT COALESCE(
+           CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END,
+           g.display_name,
+           'Unknown'
+         )) AS participant_usernames,
+         GROUP_CONCAT(DISTINCT cp.user_id) AS participant_ids,
          MAX(CASE WHEN u.deleted_at IS NOT NULL AND u.id != ? THEN 1 ELSE 0 END) AS has_deleted_participant
   FROM conversations c
   JOIN conversation_participants cp ON cp.conversation_id = c.id
-  JOIN users u ON u.id = cp.user_id
+  LEFT JOIN users u ON u.id = cp.user_id
+  LEFT JOIN guest_sessions g ON g.id = cp.user_id
 `;
 
 // ── Public route: GET /api/conversations/join/:slug (no auth) ──
@@ -277,12 +282,17 @@ router.get('/', (req, res) => {
       SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
              c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
              c.expires_at, c.created_by,
-             GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
-             GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
+             GROUP_CONCAT(DISTINCT COALESCE(
+               CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END,
+               g.display_name,
+               'Unknown'
+             )) AS participant_usernames,
+             GROUP_CONCAT(DISTINCT cp.user_id) AS participant_ids,
              MAX(CASE WHEN u.deleted_at IS NOT NULL AND u.id != ? THEN 1 ELSE 0 END) AS has_deleted_participant
       FROM conversations c
       JOIN conversation_participants cp ON cp.conversation_id = c.id
-      JOIN users u ON u.id = cp.user_id
+      LEFT JOIN users u ON u.id = cp.user_id
+      LEFT JOIN guest_sessions g ON g.id = cp.user_id
       WHERE c.id IN (
         SELECT conversation_id FROM conversation_participants WHERE user_id = ?
       )
@@ -340,12 +350,17 @@ router.post(
             SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
                    c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
                    c.expires_at, c.created_by,
-                   GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
-                   GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
+                   GROUP_CONCAT(DISTINCT COALESCE(
+                     CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END,
+                     g.display_name,
+                     'Unknown'
+                   )) AS participant_usernames,
+                   GROUP_CONCAT(DISTINCT cp.user_id) AS participant_ids,
                    MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
             FROM conversations c
             JOIN conversation_participants cp ON cp.conversation_id = c.id
-            JOIN users u ON u.id = cp.user_id
+            LEFT JOIN users u ON u.id = cp.user_id
+            LEFT JOIN guest_sessions g ON g.id = cp.user_id
             WHERE c.id = ?
             GROUP BY c.id
           `).get(existing.id);
@@ -423,12 +438,17 @@ router.post(
         SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
                c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
                c.expires_at, c.created_by,
-               GROUP_CONCAT(DISTINCT CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END) AS participant_usernames,
-               GROUP_CONCAT(DISTINCT u.id) AS participant_ids,
+               GROUP_CONCAT(DISTINCT COALESCE(
+                 CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END,
+                 g.display_name,
+                 'Unknown'
+               )) AS participant_usernames,
+               GROUP_CONCAT(DISTINCT cp.user_id) AS participant_ids,
                MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
         FROM conversations c
         JOIN conversation_participants cp ON cp.conversation_id = c.id
-        JOIN users u ON u.id = cp.user_id
+        LEFT JOIN users u ON u.id = cp.user_id
+        LEFT JOIN guest_sessions g ON g.id = cp.user_id
         WHERE c.id = ?
         GROUP BY c.id
       `).get(conversationId);
@@ -536,9 +556,12 @@ router.get('/:id/participants', [param('id').isUUID()], (req, res) => {
     if (!participant) return res.status(403).json({ error: 'Not a participant in this conversation' });
 
     const participants = db.prepare(`
-      SELECT u.id, u.username, cp.joined_at, cp.role
+      SELECT cp.user_id AS id, COALESCE(u.username, g.display_name, 'Unknown') AS username,
+             cp.joined_at, cp.role,
+             CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END AS is_guest
       FROM conversation_participants cp
-      JOIN users u ON u.id = cp.user_id
+      LEFT JOIN users u ON u.id = cp.user_id
+      LEFT JOIN guest_sessions g ON g.id = cp.user_id
       WHERE cp.conversation_id = ?
     `).all(req.params.id);
 
@@ -873,7 +896,7 @@ router.put(
   [
     param('id').isUUID(),
     body('name').optional().isString().trim().isLength({ min: 1, max: 64 }),
-    body('maxParticipants').optional().isInt({ min: 2, max: 50 }),
+    body('maxParticipants').optional().isInt({ min: 2, max: 200 }),
     body('allowGuests').optional().isBoolean(),
     body('password').optional({ nullable: true }).isString().isLength({ max: 128 }),
   ],

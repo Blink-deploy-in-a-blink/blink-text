@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { downloadMedia, updateConversationTimer, kickMember, updateInviteSettings } from '../services/api.js';
 import { decryptMediaForConversation } from '../services/cryptoService.js';
+import { rotateMySenderKey, isGroupConversation } from '../services/groupCrypto.js';
+import { emitSenderKeyDistributed } from '../services/socket.js';
 import MediaPreviewModal from './MediaPreviewModal.jsx';
 
 const TIMER_OPTIONS = [
@@ -391,6 +393,16 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
     setKickingUserId(userId);
     try {
       await kickMember(conversation.id, userId);
+      // Rotate sender key so the kicked member can't decrypt future messages
+      if (isGroupConversation(conversation.id)) {
+        const participantIds = (conversation.participant_ids || '').split(',').filter(Boolean);
+        const remainingIds = participantIds.filter((id) => id !== userId);
+        try {
+          await rotateMySenderKey(conversation.id, myUserId, remainingIds, { emitSenderKeyDistributed });
+        } catch (rotateErr) {
+          console.warn('Failed to rotate sender key after kick:', rotateErr);
+        }
+      }
     } catch (err) {
       console.error('Failed to kick member:', err);
     } finally {
