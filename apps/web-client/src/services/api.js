@@ -109,6 +109,9 @@ export const editMessage = (conversationId, messageId, payload) =>
 export const changePassword = (currentPassword, newPassword) =>
   api.put('/api/auth/password', { currentPassword, newPassword }).then((r) => r.data);
 
+export const changeUsername = (currentPassword, newUsername) =>
+  api.put('/api/auth/username', { currentPassword, newUsername }).then((r) => r.data);
+
 export const deleteAccount = (password, deleteConversations = false) =>
   api.delete('/api/auth/account', { data: { password, deleteConversations } }).then((r) => r.data);
 

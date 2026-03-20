@@ -1,5 +1,5 @@
 import { useState, useEffect, useImperativeHandle, forwardRef, useRef, useCallback } from 'react';
-import { getConversations, changePassword, deleteAccount, blockUser, unblockUser, getBlocks, checkBlocked, clearChat, nukeChat, submitReport } from '../services/api.js';
+import { getConversations, changePassword, changeUsername, deleteAccount, blockUser, unblockUser, getBlocks, checkBlocked, clearChat, nukeChat, submitReport } from '../services/api.js';
 import { getSocket, connectSocket } from '../services/socket.js';
 import { registerGroupConversation } from '../services/groupCrypto.js';
 
@@ -139,6 +139,10 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
   const [newPw, setNewPw] = useState('');
   const [pwMsg, setPwMsg] = useState(null);
   const [pwLoading, setPwLoading] = useState(false);
+  const [newUsername, setNewUsername] = useState('');
+  const [usernamePw, setUsernamePw] = useState('');
+  const [usernameMsg, setUsernameMsg] = useState(null);
+  const [usernameLoading, setUsernameLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletePw, setDeletePw] = useState('');
@@ -210,11 +214,17 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
       load(); // Refresh to pick up 'Deleted User' display names
     };
 
+    const handleUsernameChanged = () => {
+      load(); // Refresh to pick up new display names
+    };
+
     socket.on('new_conversation', handleNewConversation);
     socket.on('user_deleted', handleUserDeleted);
+    socket.on('username_changed', handleUsernameChanged);
     return () => {
       socket.off('new_conversation', handleNewConversation);
       socket.off('user_deleted', handleUserDeleted);
+      socket.off('username_changed', handleUsernameChanged);
     };
   }, []);
 
@@ -257,6 +267,34 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
       setPwMsg({ type: 'error', text: err.response?.data?.error || 'Failed to change password' });
     } finally {
       setPwLoading(false);
+    }
+  };
+
+  const handleChangeUsername = async () => {
+    setUsernameMsg(null);
+    if (!usernamePw || !newUsername) { setUsernameMsg({ type: 'error', text: 'Fill in both fields' }); return; }
+    if (newUsername.length < 3 || newUsername.length > 32) { setUsernameMsg({ type: 'error', text: 'Username must be 3-32 characters' }); return; }
+    if (!/^[a-zA-Z0-9_]+$/.test(newUsername)) { setUsernameMsg({ type: 'error', text: 'Only letters, numbers, and underscores allowed' }); return; }
+    setUsernameLoading(true);
+    try {
+      const result = await changeUsername(usernamePw, newUsername);
+      // Server regenerates session nonce on username change — save the fresh token & user
+      if (result?.token) {
+        localStorage.setItem('blink-token', result.token);
+        const updatedUser = { ...currentUser, username: result.username };
+        localStorage.setItem('blink-user', JSON.stringify(updatedUser));
+        // Reconnect Socket.io with the new token so the WS session uses the fresh nonce
+        connectSocket(result.token);
+        // Force a page reload so all components pick up the new username
+        window.location.reload();
+      }
+      setUsernameMsg({ type: 'success', text: 'Username changed!' });
+      setNewUsername('');
+      setUsernamePw('');
+    } catch (err) {
+      setUsernameMsg({ type: 'error', text: err.response?.data?.error || 'Failed to change username' });
+    } finally {
+      setUsernameLoading(false);
     }
   };
 
@@ -476,6 +514,34 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
 
         {showProfile && (
           <div style={s.profilePanel}>
+            <div style={s.profileLabel}>Change Username</div>
+            <input
+              style={s.profileInput}
+              type="text"
+              placeholder="New username"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              autoComplete="username"
+              maxLength={32}
+            />
+            <input
+              style={s.profileInput}
+              type="password"
+              placeholder="Current password"
+              value={usernamePw}
+              onChange={(e) => setUsernamePw(e.target.value)}
+              autoComplete="current-password"
+            />
+            {usernameMsg && (
+              <p style={{ ...s.profileMsg, color: usernameMsg.type === 'error' ? 'var(--danger-muted)' : '#4ade80' }}>
+                {usernameMsg.text}
+              </p>
+            )}
+            <button style={s.profileSaveBtn} onClick={handleChangeUsername} disabled={usernameLoading}>
+              {usernameLoading ? 'Saving…' : 'Update Username'}
+            </button>
+
+            <div style={{ borderTop: '1px solid var(--border-light)', marginTop: '0.75rem', paddingTop: '0.75rem' }}>
             <div style={s.profileLabel}>Change Password</div>
             <input
               style={s.profileInput}
@@ -501,6 +567,7 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
             <button style={s.profileSaveBtn} onClick={handleChangePassword} disabled={pwLoading}>
               {pwLoading ? 'Saving…' : 'Update Password'}
             </button>
+            </div>
 
             <div style={{ borderTop: '1px solid var(--border-light)', marginTop: '0.75rem', paddingTop: '0.75rem' }}>
               {!showDeleteConfirm ? (

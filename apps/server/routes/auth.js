@@ -307,6 +307,114 @@ router.put(
   }
 );
 
+// PUT /api/auth/username
+// Security: requires current password, rate-limited to 1 change per 7 days,
+// blocks reserved usernames, invalidates all sessions after change.
+const USERNAME_CHANGE_COOLDOWN_SECONDS = 7 * 24 * 60 * 60; // 7 days
+
+router.put(
+  '/username',
+  authenticateToken,
+  [
+    body('currentPassword').isString().notEmpty().withMessage('Current password is required'),
+    body('newUsername')
+      .isString()
+      .trim()
+      .isLength({ min: 3, max: 32 })
+      .matches(/^[a-zA-Z0-9_]+$/)
+      .withMessage('Username must be 3-32 alphanumeric characters or underscores'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { currentPassword, newUsername } = req.body;
+
+    try {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      // 1. Verify current password
+      const valid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
+
+      // 2. Cooldown: prevent abuse by limiting changes to once per 7 days
+      if (user.username_changed_at) {
+        const now = Math.floor(Date.now() / 1000);
+        const elapsed = now - user.username_changed_at;
+        if (elapsed < USERNAME_CHANGE_COOLDOWN_SECONDS) {
+          const remainingDays = Math.ceil((USERNAME_CHANGE_COOLDOWN_SECONDS - elapsed) / (24 * 60 * 60));
+          return res.status(429).json({
+            error: `You can only change your username once every 7 days. Try again in ${remainingDays} day(s).`,
+          });
+        }
+      }
+
+      // 3. Block reserved usernames (case-insensitive)
+      if (RESERVED_USERNAMES.has(newUsername.toLowerCase())) {
+        return res.status(400).json({ error: 'This username is not available.' });
+      }
+
+      // 4. Check if new username is the same as current
+      if (newUsername === user.username) {
+        return res.status(400).json({ error: 'New username must be different from your current username.' });
+      }
+
+      // 5. Check uniqueness (case-insensitive)
+      const existing = db.prepare(
+        'SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id != ?'
+      ).get(newUsername, req.user.id);
+      if (existing) {
+        return res.status(409).json({ error: 'This username is already taken.' });
+      }
+
+      // 6. Update username and record the change timestamp
+      const now = Math.floor(Date.now() / 1000);
+      db.prepare(
+        'UPDATE users SET username = ?, username_changed_at = ? WHERE id = ?'
+      ).run(newUsername, now, req.user.id);
+
+      // 7. Regenerate session nonce so all existing tokens are invalidated
+      const newNonce = crypto.randomBytes(16).toString('hex');
+      db.prepare('UPDATE users SET session_nonce = ? WHERE id = ?').run(newNonce, req.user.id);
+
+      // 8. Disconnect existing WebSocket connections (same as password change)
+      const io = req.app.get('io');
+      if (io) {
+        const room = io.sockets.adapter.rooms.get(req.user.id);
+        if (room) {
+          for (const socketId of room) {
+            const s = io.sockets.sockets.get(socketId);
+            if (s) s.disconnect(true);
+          }
+        }
+      }
+
+      // 9. Notify peers that this user changed their username
+      if (io) {
+        const peers = db.prepare(`
+          SELECT DISTINCT cp2.user_id FROM conversation_participants cp1
+          JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id
+          WHERE cp1.user_id = ? AND cp2.user_id != ?
+        `).all(req.user.id, req.user.id);
+        for (const peer of peers) {
+          io.to(peer.user_id).emit('username_changed', {
+            userId: req.user.id,
+            newUsername,
+          });
+        }
+      }
+
+      // 10. Issue a fresh token with the new username
+      const newToken = signToken({ id: req.user.id, username: newUsername, nonce: newNonce });
+      return res.json({ message: 'Username changed successfully', token: newToken, username: newUsername });
+    } catch (err) {
+      console.error('Change username error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
 // DELETE /api/auth/account - soft-delete the user's account
 router.delete(
   '/account',

@@ -171,6 +171,11 @@ if (!userColumns.includes('locked_until')) {
   db.exec("ALTER TABLE users ADD COLUMN locked_until INTEGER DEFAULT NULL");
 }
 
+// Username change cooldown: track when the username was last changed
+if (!userColumns.includes('username_changed_at')) {
+  db.exec("ALTER TABLE users ADD COLUMN username_changed_at INTEGER DEFAULT NULL");
+}
+
 // Reports table for user reporting mechanism
 db.exec(`
   CREATE TABLE IF NOT EXISTS reports (
