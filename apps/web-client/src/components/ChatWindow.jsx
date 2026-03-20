@@ -187,10 +187,12 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
   const [objectUrl, setObjectUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const loadingRef = useRef(false);
   const meta = parseMediaMeta(msg.plaintext);
 
   const loadMedia = useCallback(async () => {
-    if (!msg.mediaId || objectUrl || loading) return;
+    if (!msg.mediaId || loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -199,7 +201,7 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
       const ivBinary = atob(ivBase64);
       const iv = new Uint8Array(ivBinary.length);
       for (let i = 0; i < ivBinary.length; i++) iv[i] = ivBinary.charCodeAt(i);
-      const decrypted = await decryptMediaForConversation(conversationId, encryptedData, iv);
+      const decrypted = await decryptMediaForConversation(conversationId, encryptedData, iv, msg.senderId);
       const mimeType = meta?.mimeType || 'application/octet-stream';
       const blob = new Blob([decrypted], { type: mimeType });
       setObjectUrl(URL.createObjectURL(blob));
@@ -207,17 +209,19 @@ function MediaBubble({ msg, mine, conversationId, onPreview }) {
       console.error('Failed to load media:', err);
       setError('Failed to load media');
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [msg.mediaId, objectUrl, loading, conversationId, meta?.mimeType]);
+  }, [msg.mediaId, msg.senderId, conversationId, meta?.mimeType]);
 
   // Auto-load images and voice notes; videos load on click
+  // Guard with objectUrl to avoid re-fetching once we already have the blob.
   useEffect(() => {
-    if (!msg.mediaId) return;
+    if (!msg.mediaId || objectUrl) return;
     if (msg.messageType === 'image' || msg.messageType === 'voice') {
       loadMedia();
     }
-  }, [msg.mediaId, msg.messageType, loadMedia]);
+  }, [msg.mediaId, msg.messageType, objectUrl, loadMedia]);
 
   // Cleanup object URL on unmount
   useEffect(() => {
@@ -547,7 +551,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
           const ivBinary = atob(ivBase64);
           const iv = new Uint8Array(ivBinary.length);
           for (let i = 0; i < ivBinary.length; i++) iv[i] = ivBinary.charCodeAt(i);
-          const decrypted = await decryptMediaForConversation(conversation.id, encryptedData, iv);
+          const decrypted = await decryptMediaForConversation(conversation.id, encryptedData, iv, msg.senderId);
           const mimeType = meta?.mimeType || 'application/octet-stream';
           const blob = new Blob([decrypted], { type: mimeType });
           const url = URL.createObjectURL(blob);

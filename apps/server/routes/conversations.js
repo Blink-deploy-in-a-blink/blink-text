@@ -302,7 +302,7 @@ router.post(
   '/',
   [
     body('type').isIn(['direct_message', 'group_chat']).withMessage('type must be direct_message or group_chat'),
-    body('participants').isArray({ min: 1 }).withMessage('participants must be a non-empty array of user IDs'),
+    body('participants').isArray({ min: 0 }).withMessage('participants must be an array of user IDs'),
     body('name').optional().isString().trim().isLength({ max: 64 }),
     body('disappearAfter').optional({ nullable: true }).isInt({ min: 0 }).withMessage('disappearAfter must be a non-negative integer (ms)'),
     // Group/room-specific fields
