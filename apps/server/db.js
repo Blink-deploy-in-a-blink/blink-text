@@ -243,7 +243,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     display_name TEXT NOT NULL,
-    token_hash TEXT NOT NULL,
+    token_hash TEXT NOT NULL DEFAULT '',
     ip_hash TEXT,
     pow_nonce TEXT,
     is_kicked INTEGER NOT NULL DEFAULT 0,
@@ -261,5 +261,88 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_conversations_expires
     ON conversations(expires_at) WHERE expires_at IS NOT NULL;
 `);
+
+// ── Migration: remove FK on conversation_participants.user_id for guest support ──
+// Guests have IDs in guest_sessions, not in users, so the FK to users blocks guest joins.
+{
+  const cpSchema = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE name = 'conversation_participants' AND type = 'table'"
+  ).get();
+  if (cpSchema && cpSchema.sql && /user_id[^,]*REFERENCES\s+users/i.test(cpSchema.sql)) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE conversation_participants_new (
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        joined_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        role TEXT NOT NULL DEFAULT 'member',
+        PRIMARY KEY (conversation_id, user_id)
+      );
+      INSERT INTO conversation_participants_new (conversation_id, user_id, joined_at, role)
+        SELECT conversation_id, user_id, joined_at, role FROM conversation_participants;
+      DROP TABLE conversation_participants;
+      ALTER TABLE conversation_participants_new RENAME TO conversation_participants;
+      CREATE INDEX IF NOT EXISTS idx_participants_user ON conversation_participants(user_id);
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+}
+
+// ── Migration: remove FK on messages.sender_id for guest support ──
+// Guests send messages but their IDs are not in the users table.
+{
+  const msgSchema = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE name = 'messages' AND type = 'table'"
+  ).get();
+  if (msgSchema && msgSchema.sql && /sender_id[^,]*REFERENCES\s+users/i.test(msgSchema.sql)) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE messages_new (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        sender_id TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        version TEXT NOT NULL DEFAULT 'v1',
+        reply_to_id TEXT,
+        edited INTEGER NOT NULL DEFAULT 0,
+        timestamp INTEGER NOT NULL DEFAULT (unixepoch('now', 'subsec') * 1000),
+        message_type TEXT NOT NULL DEFAULT 'text',
+        media_id TEXT DEFAULT NULL,
+        chain_idx INTEGER DEFAULT NULL,
+        expires_at INTEGER DEFAULT NULL
+      );
+      INSERT INTO messages_new (id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx, expires_at)
+        SELECT id, conversation_id, sender_id, ciphertext, iv, version, reply_to_id, edited, timestamp, message_type, media_id, chain_idx, expires_at FROM messages;
+      DROP TABLE messages;
+      ALTER TABLE messages_new RENAME TO messages;
+      CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_messages_expires ON messages(expires_at) WHERE expires_at IS NOT NULL;
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+}
+
+// ── Migration: remove FK on message_deletions.user_id for guest support ──
+{
+  const mdSchema = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE name = 'message_deletions' AND type = 'table'"
+  ).get();
+  if (mdSchema && mdSchema.sql && /user_id[^,]*REFERENCES\s+users/i.test(mdSchema.sql)) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE message_deletions_new (
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        PRIMARY KEY (message_id, user_id)
+      );
+      INSERT INTO message_deletions_new (message_id, user_id)
+        SELECT message_id, user_id FROM message_deletions;
+      DROP TABLE message_deletions;
+      ALTER TABLE message_deletions_new RENAME TO message_deletions;
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+}
 
 module.exports = db;

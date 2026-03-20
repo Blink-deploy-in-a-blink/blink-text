@@ -4,11 +4,11 @@ const express = require('express');
 const { param, body, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
-const { authenticateToken } = require('../auth');
+const { authenticateAnyToken } = require('../auth');
 
 const router = express.Router();
 
-router.use(authenticateToken);
+router.use(authenticateAnyToken);
 
 // ── GET /api/group-keys/:conversationId ──
 // Returns all encrypted sender key copies addressed to the current user.

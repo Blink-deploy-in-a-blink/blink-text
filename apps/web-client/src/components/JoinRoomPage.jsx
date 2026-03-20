@@ -178,7 +178,7 @@ export default function JoinRoomPage({ slug, onJoined }) {
 
         <p style={s.meta}>
           {room.participantCount}/{room.maxParticipants} participants
-          {room.expiresAt && <> &middot; Expires {new Date(room.expiresAt).toLocaleDateString()}</>}
+          {room.expiresAt && <> &middot; Expires {new Date(room.expiresAt).toLocaleString()}</>}
         </p>
 
         {isFull ? (
