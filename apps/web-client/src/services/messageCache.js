@@ -71,6 +71,12 @@ export function getUnreadCount(conversationId) {
   return unreadCounts.get(conversationId) || 0;
 }
 
+export function getTotalUnread() {
+  let total = 0;
+  for (const count of unreadCounts.values()) total += count;
+  return total;
+}
+
 export function getAllUnreadCounts() {
   return Object.fromEntries(unreadCounts);
 }

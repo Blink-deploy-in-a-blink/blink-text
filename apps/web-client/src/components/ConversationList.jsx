@@ -37,6 +37,9 @@ const FlagIcon = () => (
 const EraserIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
 );
+const PaletteIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="0.5" fill="currentColor"/><circle cx="17.5" cy="10.5" r="0.5" fill="currentColor"/><circle cx="8.5" cy="7.5" r="0.5" fill="currentColor"/><circle cx="6.5" cy="12" r="0.5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+);
 
 const s = {
   sidebar: {
@@ -166,6 +169,21 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
   const [showBlockedList, setShowBlockedList] = useState(false);
   const [blockedLoading, setBlockedLoading] = useState(false);
   const [unblockingId, setUnblockingId] = useState(null);
+
+  // Theme state: 'dark' (default) or 'amoled'
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('blink-theme') || 'dark';
+  });
+
+  const handleThemeChange = (newTheme) => {
+    setTheme(newTheme);
+    if (newTheme === 'amoled') {
+      document.documentElement.setAttribute('data-theme', 'amoled');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    localStorage.setItem('blink-theme', newTheme);
+  };
 
   const load = async () => {
     try {
@@ -431,17 +449,34 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
       <div style={s.list}>
         {loading && <p style={s.empty}>Loading…</p>}
         {!loading && conversations.length === 0 && (
-          <p style={s.empty}>No conversations yet.<br />Start one with "+ New".</p>
+          <div style={{ ...s.empty, padding: '2.5rem 1.5rem' }}>
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5, marginBottom: '0.75rem' }}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
+              Your conversations are<br />end-to-end encrypted.
+            </div>
+            <button
+              style={{ ...s.newBtn, marginTop: '0.75rem', padding: '0.5rem 1.25rem' }}
+              onClick={onNewConversation}
+            >+ Start a Conversation</button>
+          </div>
         )}
-        {conversations
-          .filter((conv) => {
+        {(() => {
+          const filtered = conversations.filter((conv) => {
             if (!searchQuery.trim()) return true;
             const q = searchQuery.toLowerCase();
             const displayName = getDisplayName(conv).toLowerCase();
             const usernames = (conv.participant_usernames || '').toLowerCase();
             return displayName.includes(q) || usernames.includes(q);
-          })
-          .map((conv) => (
+          });
+          if (searchQuery.trim() && filtered.length === 0) {
+            return (
+              <div style={{ ...s.empty, padding: '2rem 1.5rem' }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5, marginBottom: '0.5rem' }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <div style={{ color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }}>No conversations match "{searchQuery}"</div>
+              </div>
+            );
+          }
+          return filtered.map((conv) => (
           <div
             key={conv.id}
             style={s.item(conv.id === activeConversationId)}
@@ -498,7 +533,8 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
               })()}
             </div>
           </div>
-        ))}
+        ));
+        })()}
       </div>
       <div style={s.footer}>
         <button
@@ -514,6 +550,44 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
 
         {showProfile && (
           <div style={s.profilePanel}>
+            {/* ── Theme Selector ── */}
+            <div style={s.profileLabel}><PaletteIcon /> Theme</div>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              {[
+                { id: 'dark', label: 'Dark', color: '#0a0a0a' },
+                { id: 'amoled', label: 'AMOLED Black', color: '#000000' },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => handleThemeChange(t.id)}
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.45rem 0.6rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: theme === t.id ? '1.5px solid var(--accent)' : '1.5px solid var(--border-light)',
+                    background: theme === t.id ? 'var(--accent-bg)' : 'transparent',
+                    color: theme === t.id ? 'var(--accent-muted)' : 'var(--text-secondary)',
+                    fontSize: 'var(--text-xs)',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span style={{
+                    width: 14, height: 14, borderRadius: '50%',
+                    background: t.color,
+                    border: '2px solid var(--border-light)',
+                    flexShrink: 0,
+                  }} />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border-light)', marginBottom: '0.75rem' }} />
             <div style={s.profileLabel}>Change Username</div>
             <input
               style={s.profileInput}

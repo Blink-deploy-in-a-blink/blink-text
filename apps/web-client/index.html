@@ -11,8 +11,13 @@
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       html, body { height: 100%; overflow: hidden; }
       body { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      [data-theme="amoled"] body { background: #000000; }
       #root { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
     </style>
+    <script>
+      // Apply saved theme before first paint to prevent flash
+      (function(){var t=localStorage.getItem('blink-theme');if(t==='amoled')document.documentElement.setAttribute('data-theme','amoled');})();
+    </script>
   </head>
   <body>
     <div id="root"></div>

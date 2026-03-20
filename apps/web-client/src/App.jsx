@@ -4,7 +4,7 @@ import { useMessages } from './hooks/useMessages.js';
 import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
 import { getSocket, joinConversation } from './services/socket.js';
 import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
-import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, onUnreadChange } from './services/messageCache.js';
+import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, getTotalUnread, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
 import { verifyAdmin } from './services/api.js';
 import { forwardMessage } from './services/forwardService.js';
@@ -88,6 +88,25 @@ function MessengerView({ user, logout, onShowHelp }) {
     return onUnreadChange(() => setUnreadTick((t) => t + 1));
   }, []);
 
+  // Update page title with total unread count (e.g., "(3) Blink Text")
+  useEffect(() => {
+    const updateTitle = () => {
+      const total = getTotalUnread();
+      document.title = total > 0 ? `(${total > 99 ? '99+' : total}) Blink Text` : 'Blink Text';
+    };
+    updateTitle();
+    return onUnreadChange(updateTitle);
+  }, []);
+
+  // Request notification permission on first render (non-blocking)
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      // Delay the request slightly so it doesn't appear during page load
+      const t = setTimeout(() => Notification.requestPermission(), 3000);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
   // Validate activeConversation on mount — clear if stale (Issue 4.4)
   useEffect(() => {
     if (!activeConversation) return;
@@ -152,6 +171,20 @@ function MessengerView({ user, logout, onShowHelp }) {
       if (msg.conversationId === activeConversation?.id) return;
       // Track unread regardless of whether we can decrypt
       incrementUnread(msg.conversationId);
+
+      // Fire browser notification when tab is hidden (never reveal plaintext — privacy first)
+      if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          const n = new Notification('Blink Text', {
+            body: 'New encrypted message',
+            icon: '/favicon.ico',
+            tag: 'blink-msg-' + msg.conversationId, // collapse multiple from same convo
+            silent: false,
+          });
+          n.onclick = () => { window.focus(); n.close(); };
+        } catch { /* notification not supported in this context */ }
+      }
+
       if (!hasConversationKey(msg.conversationId)) return;
       try {
         const plaintext = await decryptConversationMessage(msg.conversationId, msg.payload, msg.senderId);

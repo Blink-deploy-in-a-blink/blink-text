@@ -32,6 +32,61 @@ function formatTimeLeft(expiresAt) {
   return `${Math.round(diff / 86400000)}d`;
 }
 
+/** Get a human-readable date label for a message timestamp */
+function getDateLabel(ts) {
+  const d = new Date(typeof ts === 'number' ? ts : ts * 1000);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((today - msgDay) / 86400000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return d.toLocaleDateString(undefined, { weekday: 'long' });
+  return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+}
+
+/** Get a date key (YYYY-MM-DD) for grouping messages */
+function getDateKey(ts) {
+  const d = new Date(typeof ts === 'number' ? ts : ts * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** URL regex for linkifying messages */
+const URL_REGEX = /https?:\/\/[^\s<>"')\]},;]+/gi;
+
+/** Render text with URLs as clickable links */
+function linkifyText(text) {
+  if (!text || typeof text !== 'string') return text;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  URL_REGEX.lastIndex = 0;
+  while ((match = URL_REGEX.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const url = match[0];
+    parts.push(
+      <a
+        key={match.index}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: '2px', opacity: 0.85, wordBreak: 'break-all' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {url}
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: '0.2rem', verticalAlign: 'middle', opacity: 0.5 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </a>
+    );
+    lastIndex = match.index + url.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : text;
+}
+
 const s = {
   window: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   header: {
@@ -41,6 +96,17 @@ const s = {
   },
   messages: { flex: 1, overflowY: 'auto', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: 0, position: 'relative' },
   empty: { color: 'var(--text-faint)', textAlign: 'center', padding: '2rem', fontSize: 'var(--text-sm)' },
+  dateSeparator: {
+    display: 'flex', alignItems: 'center', gap: '0.75rem',
+    margin: '0.75rem 0 0.25rem', flexShrink: 0, userSelect: 'none',
+  },
+  dateLine: {
+    flex: 1, height: '1px', background: 'var(--border-light)',
+  },
+  dateLabel: {
+    fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 500,
+    whiteSpace: 'nowrap', letterSpacing: '0.02em',
+  },
   loadMore: {
     alignSelf: 'center', padding: '0.4rem 1rem', borderRadius: '16px',
     border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-muted)',
@@ -595,15 +661,40 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
 
   if (!conversation) {
     return (
-      <div style={{ ...s.window, alignItems: 'center', justifyContent: 'center', gap: '1rem' }} className="fade-in">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.6 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-lg)', fontWeight: 600 }}>Welcome to Blink Text</p>
-        <p style={{ color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }}>Select a conversation or start a new one</p>
+      <div style={{ ...s.window, alignItems: 'center', justifyContent: 'center', gap: '1.25rem', padding: '2rem' }} className="fade-in">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <p style={{ color: 'var(--text-primary)', fontSize: 'var(--text-lg)', fontWeight: 600, marginBottom: 0 }}>Welcome to Blink Text</p>
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center', maxWidth: '360px', lineHeight: 1.6, marginTop: 0 }}>
+          Private messaging with end-to-end encryption.<br />No phone number. No email. No trace.
+        </p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxWidth: '340px', width: '100%' }}>
+          {[
+            { icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+              text: 'Messages are encrypted before they leave your device' },
+            { icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+              text: 'Start a conversation with the "+ New" button' },
+            { icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+              text: 'Set messages to auto-delete with the timer ⏱ icon' },
+            { icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>,
+              text: 'Send encrypted voice notes, images, and videos' },
+          ].map((tip, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: '0.65rem',
+              padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-md)',
+              background: 'var(--bg-elevated)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)',
+            }}>
+              <span style={{ flexShrink: 0, display: 'flex' }}>{tip.icon}</span>
+              {tip.text}
+            </div>
+          ))}
+        </div>
+
         <button
           style={{
             padding: '0.6rem 1.5rem', borderRadius: 'var(--radius-md)', border: 'none',
             background: 'var(--accent)', color: '#fff', fontSize: 'var(--text-md)',
-            cursor: 'pointer', fontWeight: 600,
+            cursor: 'pointer', fontWeight: 600, marginTop: '0.25rem',
           }}
           onClick={onNewConversation}
         >
@@ -761,10 +852,13 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
           color: 'var(--accent)', fontSize: 'var(--text-xs)', textAlign: 'center', flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
         }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'pulse 1.5s ease-in-out infinite', flexShrink: 0 }}>
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-          <span>Waiting for <strong>{conversation.displayName || 'the other user'}</strong> to come online to establish encryption… You can still type — messages will be sent automatically.</span>
+          <span style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+            <span>Setting up encryption… <strong>{conversation.displayName || 'The other person'}</strong> needs to open this conversation once to complete the secure connection.</span>
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>This usually happens instantly when both users are online. You can type now — messages will be sent automatically when ready.</span>
+          </span>
         </div>
       )}
       <div style={s.messages} ref={messagesContainerRef}>
@@ -783,14 +877,27 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
         )}
         {loading && <p style={s.empty}>Loading messages…</p>}
         {!loading && messages.length === 0 && (
-          <p style={s.empty}>No messages yet. Send the first one!</p>
+          <div style={{ ...s.empty, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', padding: '3rem 1.5rem' }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>Say hello! Your message will be<br />encrypted before it leaves your device.</span>
+          </div>
         )}
-        {messages.map((msg) => {
+        {messages.map((msg, idx) => {
           const mine = msg.senderId === myUserId;
           const replyText = getReplyText(msg.replyToId);
+          // Show date separator when the day changes between consecutive messages
+          const prevMsg = idx > 0 ? messages[idx - 1] : null;
+          const showDateSep = !prevMsg || getDateKey(msg.timestamp) !== getDateKey(prevMsg.timestamp);
           return (
+            <div key={msg.id} style={{ display: 'contents' }}>
+            {showDateSep && (
+              <div style={s.dateSeparator}>
+                <div style={s.dateLine} />
+                <span style={s.dateLabel}>{getDateLabel(msg.timestamp)}</span>
+                <div style={s.dateLine} />
+              </div>
+            )}
             <div
-              key={msg.id}
               style={s.row(mine)}
               onMouseEnter={() => setHoveredId(msg.id)}
               onMouseLeave={() => setHoveredId(null)}
@@ -844,7 +951,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                   }>
                     {msg.plaintext === '[unable to decrypt]'
                       ? '🔒 This message can\'t be decrypted — encryption keys have changed'
-                      : msg.plaintext}
+                      : linkifyText(msg.plaintext)}
                     {msg.edited && <span style={s.edited}>(edited)</span>}
                     {msg._failed && <span style={{ ...s.edited, color: 'var(--danger-muted)' }}> (failed)</span>}
                   </div>
@@ -864,6 +971,7 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                   )}
                 </div>
               </div>
+            </div>
             </div>
           );
         })}

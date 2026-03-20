@@ -75,6 +75,25 @@
   --transition-slow: 0.25s ease;
 }
 
+/* ─── AMOLED Black Theme ─────────────────────────────────────────── */
+/* True-black surfaces for OLED power savings & maximum contrast.
+   Activated via <html data-theme="amoled">                          */
+[data-theme="amoled"] {
+  --bg-primary: #000000;
+  --bg-secondary: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-elevated: #111111;
+  --bg-hover: #141420;
+  --bg-active: #161630;
+
+  --border: #1a1a1a;
+  --border-light: #222222;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.8);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.9);
+}
+
 /* ─── Focus ──────────────────────────────────────────────────────── */
 /* Visible focus ring for keyboard navigation, hidden for mouse clicks */
 *:focus-visible {
