@@ -133,20 +133,191 @@ Username (footer) → Profile Panel
 
 ### 3.1 Primary Niche: **Privacy-Maximalist Communicators**
 
-Blink Text occupies a specific niche in the messaging ecosystem:
+Blink Text occupies a specific niche in the messaging ecosystem. To understand where we stand, we must compare against **all** major privacy-focused tools — not just mainstream messengers like Signal and Telegram, but also the niche privacy tools that share our target audience: SimpleX Chat, Session, Briar, Wire, Matrix/Element, and Threema.
 
-| Comparison | Signal | Telegram | Blink Text |
-|------------|--------|----------|------------|
-| **Requires phone number** | ✅ Yes | ✅ Yes | ❌ No |
-| **Requires email** | ❌ No | ❌ No | ❌ No |
-| **Self-hostable** | ❌ No | ❌ No | ✅ Yes |
-| **Open source (full stack)** | Partial | ❌ No | ✅ Yes |
-| **E2E encrypted by default** | ✅ Yes | ❌ No (opt-in) | ✅ Yes |
-| **Web-only (no install)** | ❌ No | ❌ No | ✅ Yes |
-| **Zero PII collection** | ❌ No | ❌ No | ✅ Yes |
-| **Burner rooms** | ❌ No | ❌ No | ✅ Yes |
+#### Full Competitive Comparison Matrix
 
-### 3.2 Target User Personas
+| Feature | Signal | Telegram | SimpleX Chat | Session | Briar | Wire | Matrix (Element) | Threema | **Blink Text** |
+|---------|--------|----------|--------------|---------|-------|------|-----------------|---------|----------------|
+| **Requires phone number** | ✅ Yes | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No (email) | ❌ No | ❌ No | ❌ **No** |
+| **Requires email** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes | ❌ Optional | ❌ No | ❌ **No** |
+| **Any user identifier** | Phone # | Phone # | None (pairwise anon queues) | Random session ID | Pseudonymous | Email | Username | Random Threema ID | **Username only** |
+| **Self-hostable** | ❌ No | ❌ No | ✅ Yes (relay servers) | ❌ No (decentralized) | ✅ P2P (no server) | ⚠️ Enterprise only | ✅ Yes (Synapse/Dendrite) | ❌ No (enterprise only) | ✅ **Yes** |
+| **Open source (full stack)** | ⚠️ Partial (server delayed) | ❌ No | ✅ Yes (AGPL-3.0) | ✅ Yes | ✅ Yes | ⚠️ Clients only | ✅ Yes | ⚠️ Clients only | ✅ **Yes** |
+| **E2E encrypted by default** | ✅ Yes | ❌ No (opt-in) | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ⚠️ Opt-in (on by default in DMs) | ✅ Yes | ✅ **Yes** |
+| **Web-only (no install needed)** | ❌ No | ⚠️ Web app exists but requires phone app | ❌ No | ❌ No | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Requires phone pairing | ✅ **Yes** |
+| **Zero PII collection** | ❌ No (phone #) | ❌ No (phone #) | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No (email) | ⚠️ Depends on server | ✅ Yes (if unlinked) | ✅ **Yes** |
+| **Burner / ephemeral rooms** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ⚠️ Guest rooms | ⚠️ Temporary rooms possible | ❌ No | ✅ **Yes** |
+| **Disappearing messages** | ✅ Yes | ✅ Yes (secret chats) | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ⚠️ Via retention policies | ⚠️ Partial | ✅ **Yes** |
+| **Metadata protection** | ⚠️ Moderate (sealed sender) | ❌ Minimal | ✅ Maximal (no social graph) | ✅ Strong (onion routing) | ✅ Strong (P2P via Tor) | ⚠️ Moderate | ⚠️ Depends on server | ⚠️ Moderate | ⚠️ **Server sees IP + timing** |
+| **Works offline / P2P** | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes (Bluetooth/WiFi) | ❌ No | ❌ No | ❌ No | ❌ **No** |
+| **Decentralized / federated** | ❌ Centralized | ❌ Centralized | ⚠️ Relay-based (semi) | ✅ Decentralized (blockchain) | ✅ P2P | ❌ Centralized | ✅ Federated | ❌ Centralized | ❌ **Centralized (self-hostable)** |
+| **Group chat E2E** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes (Megolm) | ✅ Yes | ⚠️ **In progress (sender keys)** |
+| **Media sharing (encrypted)** | ✅ Yes | ⚠️ Not in E2E | ✅ Yes | ✅ Yes | ⚠️ Limited | ✅ Yes | ✅ Yes | ✅ Yes | ✅ **Yes** |
+| **Admin / moderation tools** | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No | ✅ Yes (enterprise) | ✅ Yes | ✅ Yes (enterprise) | ✅ **Yes** |
+
+#### Where Blink Text Uniquely Wins
+
+Blink Text is the **only tool** that checks **all** of these boxes simultaneously:
+
+1. ✅ **Zero PII** — no phone, no email, no external identity
+2. ✅ **Self-hostable** — full stack, Docker-ready, single-command deploy
+3. ✅ **Web-only** — zero install friction, works in any browser
+4. ✅ **Fully open source** — client, server, crypto engine, all of it
+5. ✅ **Burner rooms** — ephemeral guest-accessible rooms with auto-expiry
+6. ✅ **Admin/moderation tools** — built-in reporting, banning, and dashboard
+7. ✅ **E2E encrypted by default** — every message, every conversation
+
+No other tool combines web-only access + zero PII + self-hosting + burner rooms. This is our moat.
+
+### 3.2 Detailed Competitive Analysis — What We Can Learn From Each
+
+#### 🔷 SimpleX Chat — *The Metadata Eliminator*
+
+**What they do well:**
+- **No user identifiers at all** — not even a username or random ID. Contacts are established via one-time invitation links with pairwise anonymous message queues. The server literally cannot build a social graph.
+- **Post-quantum encryption** integration is in progress — forward-looking crypto
+- **Double ratchet + per-message encryption layer** — defense in depth
+- **Self-hostable relay servers** that can be mixed with public relays
+
+**Where they fall short (and where Blink wins):**
+- ❌ No web client — requires installing a native app (iOS, Android, Desktop, CLI)
+- ❌ No burner rooms or guest access
+- ❌ No admin/moderation tools — not designed for teams or communities
+- ❌ Invitation-link-only contact model is powerful for privacy but awkward for discoverability
+
+**What Blink Text should learn from SimpleX:**
+- 🎯 **Metadata protection** is our biggest gap. SimpleX's pairwise queue model means even the server can't correlate who talks to whom. Blink's server currently sees conversation membership, message timing, and IP addresses. Consider: per-conversation relay rotation, padding message sizes, and timing obfuscation.
+- 🎯 **No persistent identifiers** — even usernames are a form of identifier. Consider offering an optional "anonymous mode" where users can participate with zero-knowledge identifiers.
+
+#### 🟣 Session — *The Decentralized Anonymizer*
+
+**What they do well:**
+- **Onion-routed message delivery** via the Session Network (Lokinet fork) — messages bounce through multiple nodes, hiding sender/receiver metadata
+- **No phone/email required** — uses a random Session ID
+- **Blockchain-backed infrastructure** — community-operated service nodes, no central authority
+- **12-word seed backup** for account recovery without PII
+
+**Where they fall short (and where Blink wins):**
+- ❌ No web client — requires installing a native app
+- ❌ Not self-hostable — relies on the decentralized network (can't run your own)
+- ❌ Persistent session IDs — while random, they are permanent and linkable over time
+- ❌ No burner rooms, no guest access, no admin tools
+- ❌ No built-in moderation — problematic for team/community use
+
+**What Blink Text should learn from Session:**
+- 🎯 **Seed-phrase account recovery** — Session's 12-word mnemonic backup is elegant. It provides account recovery without needing email/phone. Blink should offer optional recovery phrases (BIP39-style).
+- 🎯 **Onion routing concept** — even without full decentralization, Blink could route messages through multiple self-hosted relay nodes to reduce single-server metadata exposure.
+
+#### 🟢 Briar — *The Off-Grid Communicator*
+
+**What they do well:**
+- **Fully peer-to-peer** — no servers involved, ever. Messages travel via Tor, Bluetooth, or local WiFi
+- **Works offline** — can communicate over Bluetooth/WiFi mesh when internet is down
+- **Designed for activists and journalists** in hostile environments
+- **In-app forums and blogs** for community communication
+
+**Where they fall short (and where Blink wins):**
+- ❌ Android-only (no iOS, no web, no desktop)
+- ❌ Both users must be online simultaneously for internet-based messaging (no offline message queuing except via Bluetooth)
+- ❌ No media sharing support (text-only)
+- ❌ Very limited UX — functional but spartan
+
+**What Blink Text should learn from Briar:**
+- 🎯 **P2P fallback** — Briar's Bluetooth/WiFi mesh is uniquely valuable in crisis scenarios. Blink's KILLER FEATURE #3 (P2P Mode) should study Briar's approach to local discovery.
+- 🎯 **Forums/blogs** — Briar's in-app forums are a creative approach to community communication. Blink could consider "announcement channels" within group chats.
+
+#### 🔵 Wire — *The Enterprise Privacy Player*
+
+**What they do well:**
+- **Web client available** — one of the few privacy messengers with a full web app
+- **Self-hosted enterprise edition** — popular with businesses needing on-premise deployment
+- **Clean, modern UX** — professional design with good onboarding
+- **Guest rooms** — external participants can join without an account
+- **Video/voice calls with E2E encryption**
+
+**Where they fall short (and where Blink wins):**
+- ❌ Requires email for registration — PII collection
+- ❌ Enterprise self-hosting only (not consumer self-hosting)
+- ❌ Backend is not fully open source
+- ❌ Swiss jurisdiction data storage — still centralized trust model
+
+**What Blink Text should learn from Wire:**
+- 🎯 **UX quality** — Wire's onboarding, conversation management, and overall polish are best-in-class for privacy messengers. Blink should study Wire's empty states, settings organization, and notification design.
+- 🎯 **Guest rooms done well** — Wire's guest room UX (join via link, no account needed, time-limited access) is a direct model for Blink's burner rooms.
+- 🎯 **Voice/video calls** — Wire proves E2E encrypted calls in a web app are possible. This is a future direction for Blink.
+
+#### 🟠 Matrix / Element — *The Federated Ecosystem*
+
+**What they do well:**
+- **Fully federated** — anyone can run a server, servers communicate with each other
+- **Web client (Element)** with good UX and feature richness
+- **Bridges** to other platforms (Slack, Discord, IRC, Telegram, etc.)
+- **Spaces** for organizing rooms into communities
+- **Self-hostable** with multiple server implementations (Synapse, Dendrite, Conduit)
+- **Rich integrations** — bots, widgets, Jitsi video calls
+
+**Where they fall short (and where Blink wins):**
+- ❌ E2E encryption is opt-in for rooms (on by default only in DMs as of recent versions)
+- ❌ Complex setup — self-hosting Synapse requires significant sysadmin knowledge
+- ❌ Metadata exposure depends on server operator — public matrix.org logs IPs
+- ❌ No zero-PII guarantee — server operators set their own policies
+- ❌ Heavyweight — Synapse is resource-intensive compared to Blink's SQLite-based server
+
+**What Blink Text should learn from Matrix:**
+- 🎯 **Federation** — long-term, Blink could support optional federation between self-hosted instances, allowing cross-organization communication without centralization.
+- 🎯 **Spaces/room organization** — Matrix's "Spaces" concept (folders of rooms) is a good model for Blink's conversation organization features.
+- 🎯 **Bridges** — the ability to bridge to other platforms could be a future differentiator.
+
+#### 🟤 Threema — *The Swiss Privacy Vault*
+
+**What they do well:**
+- **No phone/email required** — uses a random Threema ID
+- **Swiss data protection laws** — strong legal privacy framework
+- **Paid model** — no ads, no data monetization, aligned incentives
+- **Verified contacts** via QR code scanning — trust verification built in
+- **Web client** (paired with mobile)
+
+**Where they fall short (and where Blink wins):**
+- ❌ Not self-hostable (consumer version)
+- ❌ Server is closed source — trust but can't verify
+- ❌ Paid ($5 one-time) — friction for adoption
+- ❌ Web client requires phone pairing — not standalone
+- ❌ No burner rooms or guest access
+
+**What Blink Text should learn from Threema:**
+- 🎯 **QR code contact verification** — Threema's three-dot trust level system (red → orange → green based on verification method) is excellent UX for trust building. Blink should implement safety number verification with similar visual feedback.
+- 🎯 **Paid sustainability model** — Threema proves privacy-focused users will pay. Consider optional donations or premium features to sustain development.
+
+### 3.3 Competitive Positioning Summary
+
+```
+                    ┌─────────────────────────────────────────────────────┐
+                    │              METADATA PROTECTION                    │
+                    │              (high ←→ low)                          │
+                    │                                                     │
+              High  │  SimpleX ·  Briar                                  │
+                    │     Session ·                                       │
+                    │                                                     │
+                    │                           · Blink Text ← WE ARE    │
+                    │                                    HERE             │
+                    │             · Threema                               │
+              Med   │                    · Matrix                         │
+                    │         · Wire                                      │
+                    │                                                     │
+                    │                · Signal                             │
+              Low   │                           · Telegram                │
+                    │                                                     │
+                    └─────────────────────────────────────────────────────┘
+                      Hard to use ←──────────────────────→ Easy to use
+                      (install required)         (web-only, no friction)
+```
+
+**Blink Text's strategic position**: We sit in a unique quadrant — **medium-high privacy with the lowest friction** (web-only, no install, no PII). SimpleX and Session offer stronger metadata protection, but require app installs and have steeper learning curves. Wire and Element offer web access, but require email or have weaker privacy defaults.
+
+**Our goal**: Move UP on the metadata protection axis (learn from SimpleX/Session) while staying RIGHT on the ease-of-use axis (our web-only advantage).
+
+### 3.4 Target User Personas
 
 #### 🕵️ **Persona 1: "The Whistleblower"**
 - **Who**: Journalists, activists, source protectors
@@ -178,7 +349,7 @@ Blink Text occupies a specific niche in the messaging ecosystem:
 - **Key features they value**: Docker compose, nginx config, single-binary DB, no external dependencies
 - **Pain point**: Needs good documentation for deployment and maintenance
 
-### 3.3 The Niche in One Sentence
+### 3.5 The Niche in One Sentence
 
 > **Blink Text is for people who need truly anonymous, zero-trace encrypted communication without installing anything or giving up personal information — and for organizations that want to self-host that capability.**
 
@@ -458,7 +629,7 @@ Based on our niche of **privacy-maximalist communicators**, here are targeted UX
 **What**: Allow users to create temporary, disposable identities (aliases) that are completely disconnected from their main account. Each burner identity has its own username, keys, and conversation history — and can be destroyed with one click, leaving zero trace.
 
 **Why This Is a Killer Feature**:
-- **No competitor offers this.** Signal, Telegram, and WhatsApp all tie identity to a phone number. Even Session (which uses no phone) has persistent identities.
+- **No competitor offers this.** Signal and Telegram tie identity to a phone number. SimpleX has no identifiers at all but also no persistent accounts. Session uses permanent random IDs. Even Briar and Threema use persistent identities. None offer disposable aliases linked to a main account.
 - **Perfect for our niche**: A journalist can use a burner identity to communicate with a source, then destroy it completely after the story publishes. An activist can create a new identity for each protest coordination effort.
 - **Builds on existing infrastructure**: The app already has multi-device support, per-conversation key exchange, and account deletion. Burner identities are a natural extension.
 
@@ -478,7 +649,7 @@ Based on our niche of **privacy-maximalist communicators**, here are targeted UX
 
 **Why This Is a Killer Feature**:
 - **Solves a real, critical problem**: Whistleblowers and sources often need to contact journalists anonymously, but even creating an account creates metadata. A dead drop removes that friction entirely.
-- **No competitor has this built in.** SecureDrop exists as a separate system but requires Tor and significant infrastructure. Blink Text could offer this as a built-in feature with zero setup.
+- **No competitor has this built in.** SecureDrop exists as a separate system but requires Tor and significant infrastructure. SimpleX's one-time invitation links are conceptually similar but require the app installed on both sides. Blink Text could offer this as a built-in, zero-install feature with no setup.
 - **Differentiates Blink Text** from every other messaging app on the market.
 
 **UX Design**:
@@ -518,7 +689,7 @@ Based on our niche of **privacy-maximalist communicators**, here are targeted UX
 
 **Why This Is a Killer Feature**:
 - **Solves a real pain point**: Secure teams constantly need to share credentials, meeting notes, and plans. Currently they'd paste into chat (lost in message history) or use a separate tool (breaks the security model).
-- **No encrypted messenger has this.** Signal has "Note to Self" but no shared docs. Telegram has no encryption on group notes. This would be a first.
+- **No encrypted messenger has this.** Signal has "Note to Self" but no shared docs. Telegram has no encryption on group notes. SimpleX, Session, Briar, Wire, and Matrix all lack collaborative encrypted documents. This would be a genuine first.
 - **Leverages existing crypto**: Uses the same per-conversation AES-256-GCM key, just with CRDT-based collaborative editing instead of chat messages.
 
 **UX Design**:
