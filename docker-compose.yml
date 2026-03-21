@@ -1,30 +1,51 @@
-version: '3.8'
-
 services:
-  server:
+  # ── Node.js application ──────────────────────────────────────────
+  # Express serves the API, WebSocket (Socket.io), and the built
+  # Vite client — all from a single container on port 3001.
+  app:
     build:
-      context: ./apps/server
+      context: .
       dockerfile: Dockerfile
-    ports:
-      - '3001:3001'
     environment:
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (min 32 chars)}
       - PORT=3001
       - DATABASE_PATH=/data/blink.db
-      - CLIENT_ORIGIN=http://localhost:5173
+      - CLIENT_ORIGIN=${CLIENT_ORIGIN:-http://localhost}
+      - TRUST_PROXY=1
+      - ALLOW_LAN=${ALLOW_LAN:-false}
+      - MAX_DEVICES_PER_USER=${MAX_DEVICES_PER_USER:-5}
+      - MAX_STORAGE_PER_USER=${MAX_STORAGE_PER_USER:-524288000}
+      - MAX_CONVERSATIONS_PER_USER=${MAX_CONVERSATIONS_PER_USER:-500}
     volumes:
       - db_data:/data
+      - uploads:/app/apps/server/uploads
+    expose:
+      - "3001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     restart: unless-stopped
 
-  client:
-    build:
-      context: ./apps/web-client
-      dockerfile: Dockerfile
+  # ── nginx reverse proxy ──────────────────────────────────────────
+  # Sits in front of the app on port 80. Handles WebSocket upgrades
+  # for /socket.io/, sets security headers, and can be extended with
+  # TLS certs for HTTPS without touching the app container.
+  nginx:
+    image: nginx:alpine
     ports:
-      - '5173:80'
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - server
+      app:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   db_data:
+    driver: local
+  uploads:
+    driver: local

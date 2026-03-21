@@ -1,0 +1,37 @@
+# Dependencies — rebuilt inside the container
+node_modules
+packages/crypto/node_modules
+packages/shared/node_modules
+apps/server/node_modules
+apps/web-client/node_modules
+
+# Build artifacts — rebuilt inside the container
+packages/crypto/dist
+apps/web-client/dist
+
+# Git
+.git
+.gitignore
+
+# Environment files (secrets must not be baked into images)
+.env
+apps/server/.env
+
+# Runtime data — mounted as volumes, not baked into images
+*.db
+*.db-wal
+*.db-shm
+apps/server/uploads
+
+# Editor / OS junk
+.vscode
+.idea
+*.swp
+*.swo
+*~
+Thumbs.db
+.DS_Store
+
+# Documentation (not needed at runtime)
+*.md
+LICENSE
