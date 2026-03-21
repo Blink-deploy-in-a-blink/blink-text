@@ -4,6 +4,7 @@ import { getSocket, joinConversation } from '../services/socket.js';
 import { getGuestSession, isGuestRoomExpired, leaveGuestSession, registerGuestEventHandlers } from '../services/guestSession.js';
 import { registerGroupConversation, setupGroupKeys } from '../services/groupCrypto.js';
 import { getParticipants } from '../services/api.js';
+import { emitSenderKeyDistributed } from '../services/socket.js';
 import ChatWindow from './ChatWindow.jsx';
 import MessageInput from './MessageInput.jsx';
 
@@ -42,15 +43,31 @@ export default function GuestChatView({ guestSession, onLeave }) {
   const [groupKeysReady, setGroupKeysReady] = useState(false);
   const setupDone = useRef(false);
 
-  // Build a pseudo-conversation object matching what ChatWindow expects
+  // Build conversation object with live participant data
+  const [participantIds, setParticipantIds] = useState('');
+  const [participantUsernames, setParticipantUsernames] = useState('');
+
   const conversation = {
     id: conversationId,
     name: conversationName,
     displayName: conversationName,
     type: 'group_chat',
-    participant_ids: '',
-    participant_usernames: '',
+    participant_ids: participantIds,
+    participant_usernames: participantUsernames,
   };
+
+  // Helper: fetch participants and update the conversation object
+  const refreshParticipants = useCallback(async () => {
+    try {
+      const participants = await getParticipants(conversationId);
+      setParticipantIds(participants.map((p) => p.id).join(','));
+      setParticipantUsernames(participants.map((p) => p.username || 'Unknown').join(','));
+      return participants;
+    } catch (err) {
+      console.warn('[GuestChat] Failed to fetch participants:', err.message);
+      return [];
+    }
+  }, [conversationId]);
 
   // Register group conversation + set up keys
   useEffect(() => {
@@ -63,9 +80,11 @@ export default function GuestChatView({ guestSession, onLeave }) {
     // Set up group sender keys
     (async () => {
       try {
-        const participants = await getParticipants(conversationId);
-        const participantIds = participants.map((p) => p.user_id || p.id);
-        await setupGroupKeys(conversationId, guestSessionId, participantIds);
+        const participants = await refreshParticipants();
+        const pIds = participants.map((p) => p.user_id || p.id);
+        await setupGroupKeys(conversationId, guestSessionId, pIds, {
+          emitSenderKeyDistributed,
+        });
         setGroupKeysReady(true);
       } catch (err) {
         console.warn('[GuestChat] Group key setup failed:', err.message);
@@ -73,7 +92,25 @@ export default function GuestChatView({ guestSession, onLeave }) {
         setGroupKeysReady(true);
       }
     })();
-  }, [conversationId, guestSessionId]);
+  }, [conversationId, guestSessionId, refreshParticipants]);
+
+  // Refresh participant list when someone joins or leaves
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+    const onUserJoined = ({ conversationId: cid }) => {
+      if (cid === conversationId) refreshParticipants();
+    };
+    const onUserKicked = ({ conversationId: cid }) => {
+      if (cid === conversationId) refreshParticipants();
+    };
+    socket.on('user_joined', onUserJoined);
+    socket.on('user_kicked', onUserKicked);
+    return () => {
+      socket.off('user_joined', onUserJoined);
+      socket.off('user_kicked', onUserKicked);
+    };
+  }, [conversationId, refreshParticipants]);
 
   // Register guest event handlers (kick, expiry)
   useEffect(() => {
