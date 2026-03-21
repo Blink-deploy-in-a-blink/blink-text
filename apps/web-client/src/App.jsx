@@ -659,11 +659,19 @@ export default function App() {
     return (
       <JoinRoomPage
         slug={hashRoute.slug}
+        currentUser={user}
         onJoined={(data) => {
-          // After joining, transition to guest chat mode
-          window.location.hash = '#/';
-          setHashRoute({ route: 'main' });
-          setGuestSession(getGuestSession());
+          if (data.joinedAsUser) {
+            // Authenticated user joined — go back to main messenger view
+            // The new_conversation socket event will add it to their conversation list
+            window.location.hash = '#/';
+            setHashRoute({ route: 'main' });
+          } else {
+            // Guest joined — transition to guest chat mode
+            window.location.hash = '#/';
+            setHashRoute({ route: 'main' });
+            setGuestSession(getGuestSession());
+          }
         }}
       />
     );
