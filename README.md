@@ -1129,20 +1129,110 @@ console.log('Device ID:',    JSON.parse(localStorage.getItem('blink-device-id'))
 
 ## Running with Docker
 
-> **Note:** The Docker setup requires Dockerfiles that are not included in this repo by default. The instructions below describe the intended setup for deploying a production build.
+The repo includes a production-ready Docker setup: a **multi-stage `Dockerfile`**, **`docker-compose.yml`**, and an **nginx reverse proxy**. One command builds everything and starts the app.
 
-```bash
-# Copy and edit the environment file first
-cp apps/server/.env.example .env
-# Set a strong JWT_SECRET in .env
+### Architecture
 
-docker compose up --build
+```
+Browser ──► nginx:80 ──► app:3001  (Express serves API + WebSocket + built client)
+             │                │
+             │           ┌────┴─────┐
+             │           │ Volumes  │
+             │           │ db_data  │  (SQLite database)
+             │           │ uploads  │  (encrypted media files)
+             │           └──────────┘
+             │
+             └─ WebSocket upgrade for /socket.io/
 ```
 
-- Server → `http://localhost:3001`
-- Client  → `http://localhost:5173`
+### Quick start
 
-The database is persisted in a named Docker volume (`db_data`).
+```bash
+# 1. Copy the Docker env template and set a strong JWT_SECRET
+cp .env.docker.example .env
+# Edit .env — at minimum change JWT_SECRET to a random 32+ char string:
+#   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+
+# 2. Build and start everything
+docker compose up --build -d
+
+# 3. Open the app
+#    http://localhost  (nginx on port 80 proxies to the app container)
+```
+
+### Admin setup (Docker)
+
+There is no API endpoint to grant admin access — only the server operator can promote users via the CLI inside the container:
+
+```bash
+docker compose exec app node apps/server/admin-cli.js promote <username>
+docker compose exec app node apps/server/admin-cli.js list
+```
+
+### Useful commands
+
+```bash
+# View logs
+docker compose logs -f app
+docker compose logs -f nginx
+
+# Stop everything (data persists in volumes)
+docker compose down
+
+# Stop and delete all data (database + uploads)
+docker compose down -v
+
+# Rebuild after code changes
+docker compose up --build -d
+```
+
+### Migrating from bare-metal
+
+If you have an existing `blink.db` and `uploads/` directory from a non-Docker deployment:
+
+```bash
+# 1. Find the Docker volume mount paths
+docker volume inspect blink-text_db_data
+docker volume inspect blink-text_uploads
+
+# 2. Copy your existing data into the volumes
+#    (the exact paths depend on your Docker storage driver)
+sudo cp blink.db   /var/lib/docker/volumes/blink-text_db_data/_data/blink.db
+sudo cp -r uploads/ /var/lib/docker/volumes/blink-text_uploads/_data/
+```
+
+### Environment variables
+
+All configuration is done via the root `.env` file (see `.env.docker.example`):
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `JWT_SECRET` | **Yes** | — | Secret for signing JWTs. Must be ≥ 32 chars. |
+| `CLIENT_ORIGIN` | No | `http://localhost` | Allowed CORS origin (your public URL). |
+| `HTTP_PORT` | No | `80` | Host port nginx listens on. |
+| `ALLOW_LAN` | No | `false` | Allow CORS from LAN IPs (`192.168.*`, `10.*`). |
+| `MAX_DEVICES_PER_USER` | No | `5` | Max devices per user account. |
+| `MAX_STORAGE_PER_USER` | No | `524288000` (500 MB) | Per-user media storage quota in bytes. |
+| `MAX_CONVERSATIONS_PER_USER` | No | `500` | Max conversations per user. |
+
+### Adding HTTPS (TLS)
+
+The nginx container listens on port 80 (HTTP). To add HTTPS:
+
+**Option A — Cloudflare (easiest):** Point your domain's DNS to your server with Cloudflare proxy enabled, set SSL mode to Flexible. No changes needed in Docker.
+
+**Option B — Self-managed certs:** Mount your cert files into the nginx container and add an `nginx/ssl.conf`. Example docker-compose override:
+
+```yaml
+# docker-compose.override.yml
+services:
+  nginx:
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx/ssl.conf:/etc/nginx/conf.d/ssl.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+```
 
 ---
 
