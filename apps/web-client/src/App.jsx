@@ -44,12 +44,55 @@ function useIsMobile() {
   return mobile;
 }
 
-// Parse hash route: /#/r/:slug -> { route: 'room', slug }
+// ── Hash-based routing ──────────────────────────────────────────────
+// Every screen transition pushes a hash entry so the browser Back button
+// navigates within the app instead of leaving it.
+//
+// Routes:
+//   #/              → Welcome (unauth) or Messenger list (auth)
+//   #/login         → Login page
+//   #/register      → Register page
+//   #/terms         → Terms of Service
+//   #/privacy       → Privacy Policy
+//   #/help          → Help page
+//   #/r/:slug       → Room invite join page
+//   #/chat/:convId  → Active conversation (auth, mobile back → list)
+//   #/admin         → Admin panel (auth)
+
 function parseHashRoute() {
-  const hash = window.location.hash || '';
+  const hash = window.location.hash || '#/';
+  // Room invite link
   const roomMatch = hash.match(/^#\/r\/([A-Za-z0-9_-]{4,32})$/);
   if (roomMatch) return { route: 'room', slug: roomMatch[1] };
+  // Active conversation
+  const chatMatch = hash.match(/^#\/chat\/([0-9a-f-]{36})$/);
+  if (chatMatch) return { route: 'chat', convId: chatMatch[1] };
+  // Named routes
+  if (hash === '#/login') return { route: 'login' };
+  if (hash === '#/register') return { route: 'register' };
+  if (hash === '#/terms') return { route: 'terms' };
+  if (hash === '#/privacy') return { route: 'privacy' };
+  if (hash === '#/help') return { route: 'help' };
+  if (hash === '#/admin') return { route: 'admin' };
   return { route: 'main' };
+}
+
+/** Push a new hash route (creates a browser history entry). */
+function navigate(path) {
+  const target = '#' + path;
+  if (window.location.hash !== target) {
+    window.location.hash = target;
+  }
+}
+
+/** Replace current hash route without creating a history entry. */
+function navigateReplace(path) {
+  const target = '#' + path;
+  if (window.location.hash !== target) {
+    window.history.replaceState(null, '', target);
+    // Manually dispatch hashchange so listeners pick it up
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  }
 }
 
 function MessengerView({ user, logout, onShowHelp }) {
@@ -66,13 +109,49 @@ function MessengerView({ user, logout, onShowHelp }) {
   const [editingMsg, setEditingMsg] = useState(null);
   const [forwardingMsg, setForwardingMsg] = useState(null); // message to forward
   const [reportTarget, setReportTarget] = useState(null); // { userId, username, conversationId, messageId }
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(() => parseHashRoute().route === 'admin');
   // Admin status is fetched fresh from the server on every mount.
   // NEVER stored in localStorage — always verified against the DB via /api/admin/verify.
   const [isAdmin, setIsAdmin] = useState(false);
   const conversationListRef = useRef(null);
   // Force re-render key for unread badges
   const [, setUnreadTick] = useState(0);
+
+  // ── Sync hash → in-app state (browser Back navigates within the app) ──
+  useEffect(() => {
+    const onHash = () => {
+      const r = parseHashRoute();
+      if (r.route === 'admin') {
+        setShowAdminPanel(true);
+      } else if (r.route === 'chat' && r.convId) {
+        setShowAdminPanel(false);
+        // If we're navigating back to a different conversation, the selection
+        // is updated from localStorage below. The convId in hash is the source
+        // of truth for "should a conversation be open".
+        // If convId doesn't match active, reload from localStorage (browser back)
+        setActiveConversation((prev) => {
+          if (prev && prev.id === r.convId) return prev;
+          try {
+            const raw = localStorage.getItem('blink-active-conv');
+            const stored = raw ? JSON.parse(raw) : null;
+            if (stored && stored.id === r.convId) return stored;
+          } catch { /* ignore */ }
+          return prev;
+        });
+      } else if (r.route === 'main' || r.route === 'help') {
+        // Back to conversation list or help
+        setShowAdminPanel(false);
+        if (r.route === 'main') {
+          setActiveConversation(null);
+          localStorage.removeItem('blink-active-conv');
+          setReplyTo(null);
+          setEditingMsg(null);
+        }
+      }
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   // Background preload all conversations' keys + messages
   useBackgroundPreloader(user.id);
@@ -293,6 +372,14 @@ function MessengerView({ user, logout, onShowHelp }) {
     // Clear unread count when switching to this conversation
     clearUnread(conv.id);
 
+    // On mobile: push hash so Back returns to conversation list.
+    // On desktop: replace hash so Back doesn't cycle through every conversation.
+    if (isMobile) {
+      navigate('/chat/' + conv.id);
+    } else {
+      navigateReplace('/chat/' + conv.id);
+    }
+
     // For group conversations: ensure sender key is distributed
     if (conv.type === 'group_chat') {
       try {
@@ -307,7 +394,7 @@ function MessengerView({ user, logout, onShowHelp }) {
         console.warn('[group] Sender key setup failed for', conv.id, err.message);
       }
     }
-  }, [user.username, user.id]);
+  }, [user.username, user.id, isMobile]);
 
   const handleNewConversation = (conv) => {
     conversationListRef.current?.refresh();
@@ -369,16 +456,25 @@ function MessengerView({ user, logout, onShowHelp }) {
   const showChat = !isMobile || !!activeConversation;
 
   const handleBack = () => {
-    setActiveConversation(null);
-    localStorage.removeItem('blink-active-conv');
-    setReplyTo(null);
-    setEditingMsg(null);
+    if (isMobile) {
+      // Mobile: use real browser back so the history stack stays clean.
+      // navigate() pushed #/chat/:id, so back() pops to #/ (conversation list).
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        navigateReplace('/');
+      }
+    } else {
+      // Desktop: conversation was opened via navigateReplace, so there's no
+      // history entry to go back to. Just clear the selection directly.
+      navigateReplace('/');
+    }
   };
 
   return (
     <div style={appStyles.app}>
       {showAdminPanel ? (
-        <AdminPanel onClose={() => setShowAdminPanel(false)} />
+        <AdminPanel onClose={() => window.history.back()} />
       ) : (
         <>
           {showSidebar && (
@@ -392,7 +488,7 @@ function MessengerView({ user, logout, onShowHelp }) {
               isMobile={isMobile}
               getUnreadCount={getUnreadCount}
               isAdmin={isAdmin}
-              onOpenAdmin={() => setShowAdminPanel(true)}
+              onOpenAdmin={() => navigate('/admin')}
               onShowHelp={onShowHelp}
             />
           )}
@@ -413,7 +509,7 @@ function MessengerView({ user, logout, onShowHelp }) {
                 onForward={(msg) => setForwardingMsg(msg)}
                 onReport={handleReport}
                 onNewConversation={() => setShowNewModal(true)}
-                onBack={isMobile ? handleBack : null}
+                onBack={handleBack}
                 onTimerChanged={() => conversationListRef.current?.refresh()}
               />
               <MessageInput
@@ -466,18 +562,54 @@ function MessengerView({ user, logout, onShowHelp }) {
 
 export default function App() {
   const { user, login, register, logout, ready, identityError, retryIdentity } = useAuth();
-  const [view, setView] = useState('welcome');
   const [sessionExpired, setSessionExpired] = useState(false);
   const [hashRoute, setHashRoute] = useState(parseHashRoute);
   // Guest session state: set after a guest successfully joins a room
   const [guestSession, setGuestSession] = useState(() => getGuestSession());
 
-  // Listen for hash changes (e.g. invite links)
+  // Listen for hash changes (browser Back, navigate() calls, etc.)
   useEffect(() => {
     const onHash = () => setHashRoute(parseHashRoute());
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  // ── SECURITY: Prevent stale authenticated content after logout ──
+  // 1. bfcache: If the browser restores the page from back-forward cache after logout,
+  //    detect it via the `pageshow` event and force a full reload.
+  // 2. visibility: When the user switches back to this tab, verify the session is still
+  //    valid. If the token was cleared (logout in another tab, or session expired), reload.
+  useEffect(() => {
+    const onPageShow = (e) => {
+      if (e.persisted) {
+        // Page was restored from bfcache — check if the user is still logged in
+        const token = localStorage.getItem('blink-token');
+        const session = sessionStorage.getItem('blink-session');
+        if (!token && !session) {
+          // Session was destroyed — force a clean reload to prevent stale content
+          window.location.replace(window.location.pathname + '#/');
+          window.location.reload();
+        }
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        const token = localStorage.getItem('blink-token');
+        const session = sessionStorage.getItem('blink-session');
+        if (!token && !session && user) {
+          // User was logged in but session is gone — force reload
+          window.location.replace(window.location.pathname + '#/');
+          window.location.reload();
+        }
+      }
+    };
+    window.addEventListener('pageshow', onPageShow);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pageshow', onPageShow);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [user]);
 
   // Listen for session-expired events from the API interceptor or WebSocket
   useEffect(() => {
@@ -521,16 +653,20 @@ export default function App() {
         guestSession={guestSession}
         onLeave={() => {
           setGuestSession(null);
-          window.location.hash = '#/';
+          navigateReplace('/');
         }}
       />
     );
   }
 
-  // Logged-in users go straight to the messenger (or help page if requested)
+  // Logged-in users go straight to the messenger (or help/terms/privacy if requested)
   if (user) {
-    if (view === 'help') {
-      return <HelpPage onBack={() => setView('messenger')} />;
+    // If logged in but hash is on an auth page, silently redirect to main
+    if (['login', 'register', 'terms', 'privacy'].includes(hashRoute.route)) {
+      navigateReplace('/');
+    }
+    if (hashRoute.route === 'help') {
+      return <HelpPage onBack={() => navigate('/')} />;
     }
     return (
       <>
@@ -554,40 +690,49 @@ export default function App() {
             </button>
           </div>
         )}
-        <MessengerView user={user} logout={logout} onShowHelp={() => setView('help')} />
+        <MessengerView user={user} logout={logout} onShowHelp={() => navigate('/help')} />
       </>
     );
   }
 
-  // Not logged in — show the appropriate view
-  if (view === 'help') {
-    return <HelpPage onBack={() => setView('welcome')} />;
+  // ── Not logged in — route based on hash ──
+
+  // SECURITY: If the hash points to an authenticated route but user is not logged in,
+  // redirect to the welcome page. This prevents stale hashes (e.g. from browser history)
+  // from rendering any authenticated content.
+  if (['chat', 'admin'].includes(hashRoute.route)) {
+    navigateReplace('/');
+    return null;
   }
 
-  if (view === 'terms') {
-    return <TermsOfService onBack={() => setView('register')} />;
+  if (hashRoute.route === 'help') {
+    return <HelpPage onBack={() => navigate('/')} />;
   }
 
-  if (view === 'privacy') {
-    return <PrivacyPolicy onBack={() => setView('register')} />;
+  if (hashRoute.route === 'terms') {
+    return <TermsOfService onBack={() => navigate('/register')} />;
   }
 
-  if (view === 'register') {
+  if (hashRoute.route === 'privacy') {
+    return <PrivacyPolicy onBack={() => navigate('/register')} />;
+  }
+
+  if (hashRoute.route === 'register') {
     return (
       <Register
         onRegister={register}
-        onSwitchToLogin={() => setView('login')}
-        onShowTerms={() => setView('terms')}
-        onShowPrivacy={() => setView('privacy')}
+        onSwitchToLogin={() => navigate('/login')}
+        onShowTerms={() => navigate('/terms')}
+        onShowPrivacy={() => navigate('/privacy')}
       />
     );
   }
 
-  if (view === 'login') {
+  if (hashRoute.route === 'login') {
     return (
       <Login
         onLogin={login}
-        onSwitchToRegister={() => setView('register')}
+        onSwitchToRegister={() => navigate('/register')}
       />
     );
   }
@@ -595,11 +740,11 @@ export default function App() {
   // Default: welcome page
   return (
     <WelcomePage
-      onLogin={() => setView('login')}
-      onRegister={() => setView('register')}
-      onShowTerms={() => setView('terms')}
-      onShowPrivacy={() => setView('privacy')}
-      onShowHelp={() => setView('help')}
+      onLogin={() => navigate('/login')}
+      onRegister={() => navigate('/register')}
+      onShowTerms={() => navigate('/terms')}
+      onShowPrivacy={() => navigate('/privacy')}
+      onShowHelp={() => navigate('/help')}
     />
   );
 }

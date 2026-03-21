@@ -109,13 +109,28 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 // Serve the built web client in production (after `vite build`)
 // ------------------------------------------------------------------
 const clientDistPath = path.join(__dirname, '../web-client/dist');
-app.use(express.static(clientDistPath));
+
+// SECURITY: Prevent browsers from caching index.html.
+// Without this, after logout the browser Back button can show a stale cached page
+// from the authenticated session. Assets with hashed filenames can still be cached.
+app.use(express.static(clientDistPath, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html') || filePath.endsWith('/')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  },
+}));
 
 // API 404 handler — only for /api routes
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
 // SPA fallback — serve index.html for any non-API, non-file route
 app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(clientDistPath, 'index.html'), (err) => {
     if (err) res.status(404).json({ error: 'Not found' });
   });

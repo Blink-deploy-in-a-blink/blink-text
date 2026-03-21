@@ -110,6 +110,14 @@ export function useAuth() {
       setIdentityError(err.message || 'Failed to initialize encryption');
       // Don't throw — let the user in so they can retry
     }
+
+    // Reset the hash to the main view so the browser history is clean
+    // (user shouldn't be able to Back into the login/register page)
+    if (window.location.hash && window.location.hash !== '#/') {
+      window.history.replaceState(null, '', '#/');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }
+
     setUser(u);
     setReady(true);
   }, []);
@@ -167,13 +175,31 @@ export function useAuth() {
   );
 
   const logout = useCallback(async () => {
-    clearAllBlinkData();
-    clearMessageCache();
-    await clearAllCryptoKeys();
-    sessionStorage.removeItem('blink-session');
+    // ── SECURITY: Total state annihilation on logout ──
+    // 1. Disconnect real-time transports first (prevents any late messages)
     disconnectSocket();
+
+    // 2. Wipe ALL blink-* keys from localStorage (tokens, user, device, theme, etc.)
+    clearAllBlinkData();
+
+    // 3. Wipe in-memory caches (decrypted messages, unread counts)
+    clearMessageCache();
+
+    // 4. Wipe all crypto material (conversation keys, identity, ECDH, ephemeral, group)
+    await clearAllCryptoKeys();
+
+    // 5. Wipe ALL sessionStorage (session sentinel, guest tokens, any future additions)
+    sessionStorage.clear();
+
+    // 6. Clear React state
     setUser(null);
     setReady(true);
+
+    // 7. Nuke the entire browser history stack so Back cannot re-enter authenticated pages.
+    //    Replace current entry with welcome, then push a duplicate so the user can't go
+    //    "back" past the welcome page.
+    window.history.replaceState({ loggedOut: true }, '', '#/');
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
   }, []);
 
   return { user, loading, error, login, register, logout, ready, identityError, retryIdentity };
