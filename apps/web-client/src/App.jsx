@@ -26,6 +26,7 @@ import WelcomePage from './components/WelcomePage.jsx';
 import HelpPage from './components/HelpPage.jsx';
 import SessionExpiredModal from './components/SessionExpiredModal.jsx';
 import JoinRoomPage from './components/JoinRoomPage.jsx';
+import GuestChatView from './components/GuestChatView.jsx';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' },
@@ -468,6 +469,8 @@ export default function App() {
   const [view, setView] = useState('welcome');
   const [sessionExpired, setSessionExpired] = useState(false);
   const [hashRoute, setHashRoute] = useState(parseHashRoute);
+  // Guest session state: set after a guest successfully joins a room
+  const [guestSession, setGuestSession] = useState(() => getGuestSession());
 
   // Listen for hash changes (e.g. invite links)
   useEffect(() => {
@@ -502,9 +505,23 @@ export default function App() {
       <JoinRoomPage
         slug={hashRoute.slug}
         onJoined={(data) => {
-          // After joining, clear the hash and reload into guest mode or main app
+          // After joining, transition to guest chat mode
           window.location.hash = '#/';
           setHashRoute({ route: 'main' });
+          setGuestSession(getGuestSession());
+        }}
+      />
+    );
+  }
+
+  // Guest mode: show the guest chat view for the joined room
+  if (guestSession && !user) {
+    return (
+      <GuestChatView
+        guestSession={guestSession}
+        onLeave={() => {
+          setGuestSession(null);
+          window.location.hash = '#/';
         }}
       />
     );

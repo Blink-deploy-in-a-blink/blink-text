@@ -272,8 +272,8 @@ router.post(
   }
 );
 
-// All routes below require authentication
-router.use(authenticateToken);
+// All routes below require authentication (registered users OR guests)
+router.use(authenticateAnyToken);
 
 // GET /api/conversations
 router.get('/', (req, res) => {
@@ -875,10 +875,10 @@ router.put(
       const { enabled } = req.body;
 
       if (enabled) {
-        // Generate a new slug if none exists, or regenerate
-        const newSlug = generateSlug();
-        db.prepare('UPDATE conversations SET invite_enabled = 1, slug = ? WHERE id = ?').run(newSlug, req.params.id);
-        return res.json({ inviteEnabled: true, slug: newSlug });
+        // Reuse existing slug if one exists; only generate a new one if there isn't one
+        const slug = conv.slug || generateSlug();
+        db.prepare('UPDATE conversations SET invite_enabled = 1, slug = ? WHERE id = ?').run(slug, req.params.id);
+        return res.json({ inviteEnabled: true, slug });
       } else {
         db.prepare('UPDATE conversations SET invite_enabled = 0 WHERE id = ?').run(req.params.id);
         return res.json({ inviteEnabled: false, slug: conv.slug });

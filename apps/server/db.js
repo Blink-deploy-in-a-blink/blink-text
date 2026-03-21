@@ -260,6 +260,15 @@ db.exec(`
 `);
 
 // Unique index on conversation slug for fast public lookups
+// Drop first in case a non-unique version exists from an earlier migration
+{
+  const existingIdx = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE name = 'idx_conversations_slug' AND type = 'index'"
+  ).get();
+  if (existingIdx && existingIdx.sql && !/UNIQUE/i.test(existingIdx.sql)) {
+    db.exec('DROP INDEX IF EXISTS idx_conversations_slug');
+  }
+}
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_slug
     ON conversations(slug) WHERE slug IS NOT NULL;

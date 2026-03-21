@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { createConversation, searchUsers, updateInviteSettings } from '../services/api.js';
+import { createConversation, searchUsers } from '../services/api.js';
 
 const s = {
   overlay: {
@@ -165,17 +165,14 @@ export default function NewConversationModal({ currentUser, onClose, onCreated }
           members.map((m) => m.id),
           groupName.trim(),
           timerValue,
-          { allowGuests, password: roomPassword || undefined, maxParticipants, expiresIn: expiresMs },
+          { inviteEnabled: true, allowGuests, password: roomPassword || undefined, maxParticipants, expiresIn: expiresMs },
         );
-        // Enable invite link
-        try {
-          const updated = await updateInviteSettings(conv.id, true);
-          if (updated.slug) {
-            setInviteLink(`${window.location.origin}/#/r/${updated.slug}`);
-          }
-        } catch { /* non-critical */ }
+        // Show invite link from the slug created during room creation
+        if (conv.slug) {
+          setInviteLink(`${window.location.origin}/#/r/${conv.slug}`);
+        }
         onCreated(conv);
-        if (!inviteLink) onClose();
+        if (!conv.slug) onClose();
       }
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Failed to create conversation');

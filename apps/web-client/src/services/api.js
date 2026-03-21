@@ -13,9 +13,9 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Attach JWT token to every request
+// Attach JWT token to every request (registered user token OR guest token)
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('blink-token');
+  const token = localStorage.getItem('blink-token') || sessionStorage.getItem('blink-guest-token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -33,7 +33,9 @@ api.interceptors.response.use(
       !error.config.url?.includes('/api/auth/login') &&
       !error.config.url?.includes('/api/auth/register') &&
       // Don't auto-logout when admin verify returns 403 (normal for non-admins)
-      !(error.config.url?.includes('/api/admin/verify') && error.response.status === 403)
+      !(error.config.url?.includes('/api/admin/verify') && error.response.status === 403) &&
+      // Don't auto-logout for guest sessions — they use sessionStorage, not localStorage
+      !sessionStorage.getItem('blink-guest-token')
     ) {
       isLoggingOut = true;
 
