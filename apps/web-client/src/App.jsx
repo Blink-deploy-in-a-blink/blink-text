@@ -356,11 +356,34 @@ function MessengerView({ user, logout, onShowHelp }) {
 
     socket.on('conversation_timer_changed', handleTimerChanged);
     socket.on('conversation_nuked', handleConversationNuked);
+
+    // When a new user (or guest) joins a room we're in, refresh participant data
+    // so display names resolve correctly instead of showing UUIDs.
+    const handleUserJoined = async ({ conversationId }) => {
+      if (activeConversation?.id !== conversationId) return;
+      try {
+        const conversations = await getConversations();
+        const fresh = conversations.find((c) => c.id === conversationId);
+        if (fresh) {
+          const names = (fresh.participant_usernames || '').split(',').filter((n) => n !== user.username);
+          setActiveConversation((prev) => prev ? {
+            ...prev,
+            participant_ids: fresh.participant_ids,
+            participant_usernames: fresh.participant_usernames,
+            displayName: fresh.name || names.join(', ') || 'Conversation',
+          } : prev);
+        }
+      } catch { /* ignore */ }
+      conversationListRef.current?.refresh();
+    };
+    socket.on('user_joined', handleUserJoined);
+
     return () => {
       socket.off('conversation_timer_changed', handleTimerChanged);
       socket.off('conversation_nuked', handleConversationNuked);
+      socket.off('user_joined', handleUserJoined);
     };
-  }, [activeConversation?.id]);
+  }, [activeConversation?.id, user.username]);
 
   const handleSelectConversation = useCallback(async (conv) => {
     const names = (conv.participant_usernames || '').split(',').filter((n) => n !== user.username);
