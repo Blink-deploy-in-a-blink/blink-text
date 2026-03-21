@@ -797,6 +797,14 @@ export function getDeviceId() {
   return deviceId;
 }
 
+/**
+ * Get the device ECDH private key (JWK) for pairwise key derivation in group crypto.
+ * Returns null if identity not initialized.
+ */
+export function getECDHPrivateKey() {
+  return ecdhKeypair ? ecdhKeypair.privateKey : null;
+}
+
 // ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
