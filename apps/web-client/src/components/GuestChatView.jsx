@@ -5,6 +5,7 @@ import { getGuestSession, isGuestRoomExpired, leaveGuestSession, registerGuestEv
 import { registerGroupConversation, setupGroupKeys } from '../services/groupCrypto.js';
 import { getParticipants } from '../services/api.js';
 import { emitSenderKeyDistributed } from '../services/socket.js';
+import { initializeGuestCrypto } from '../services/cryptoService.js';
 import ChatWindow from './ChatWindow.jsx';
 import MessageInput from './MessageInput.jsx';
 
@@ -80,6 +81,10 @@ export default function GuestChatView({ guestSession, onLeave }) {
     // Set up group sender keys
     (async () => {
       try {
+        // Initialize guest crypto identity (ECDH keypair + device registration)
+        // Must happen BEFORE setupGroupKeys so pairwise wrapping keys can be derived
+        await initializeGuestCrypto();
+
         const participants = await refreshParticipants();
         const pIds = participants.map((p) => p.user_id || p.id);
         await setupGroupKeys(conversationId, guestSessionId, pIds, {

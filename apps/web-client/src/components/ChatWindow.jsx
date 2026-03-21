@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
-import { downloadMedia, updateConversationTimer, kickMember, updateInviteSettings, getParticipants } from '../services/api.js';
+import { downloadMedia, updateConversationTimer, kickMember, updateInviteSettings, getParticipants, searchUsers, addMember } from '../services/api.js';
 import { decryptMediaForConversation } from '../services/cryptoService.js';
 import { rotateMySenderKey, isGroupConversation } from '../services/groupCrypto.js';
 import { emitSenderKeyDistributed } from '../services/socket.js';
@@ -425,6 +425,38 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const [kickingUserId, setKickingUserId] = useState(null);
   const [inviteCopied, setInviteCopied] = useState(false);
 
+  // Add member state
+  const [addMemberInput, setAddMemberInput] = useState('');
+  const [addMemberResults, setAddMemberResults] = useState([]);
+  const [addingMemberId, setAddingMemberId] = useState(null);
+  const [addMemberError, setAddMemberError] = useState('');
+
+  const handleSearchMember = useCallback(async (q) => {
+    if (!q.trim()) { setAddMemberResults([]); return; }
+    try {
+      const res = await searchUsers(q.trim());
+      const participantIds = (conversation?.participant_ids || '').split(',').filter(Boolean);
+      setAddMemberResults(res.filter(
+        (u) => u.id !== myUserId && !participantIds.includes(u.id)
+      ));
+    } catch { setAddMemberResults([]); }
+  }, [conversation, myUserId]);
+
+  const handleAddMember = async (userId) => {
+    if (!conversation) return;
+    setAddingMemberId(userId);
+    setAddMemberError('');
+    try {
+      await addMember(conversation.id, userId);
+      setAddMemberInput('');
+      setAddMemberResults([]);
+    } catch (err) {
+      setAddMemberError(err.response?.data?.error || 'Failed to add member');
+    } finally {
+      setAddingMemberId(null);
+    }
+  };
+
   // Close timer dropdown on outside click
   useEffect(() => {
     if (!showTimerDropdown) return;
@@ -812,6 +844,47 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 )}
               </div>
             ))}
+
+            {/* Add member section (admin only) */}
+            {isCreator && (
+              <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Add Member</div>
+                <input
+                  style={{
+                    width: '100%', padding: '0.35rem 0.5rem', borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-light)', background: 'var(--bg-primary)',
+                    color: 'var(--text-primary)', fontSize: 'var(--text-xs)', boxSizing: 'border-box',
+                  }}
+                  type="text" placeholder="Search username..."
+                  value={addMemberInput}
+                  onChange={(e) => { setAddMemberInput(e.target.value); handleSearchMember(e.target.value); }}
+                />
+                {addMemberResults.length > 0 && (
+                  <div style={{ maxHeight: '100px', overflowY: 'auto', marginTop: '0.25rem' }}>
+                    {addMemberResults.map((u) => (
+                      <div key={u.id} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '0.25rem 0.35rem', fontSize: 'var(--text-xs)', cursor: 'pointer',
+                        borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)',
+                      }}>
+                        <span>{u.username}</span>
+                        <button
+                          style={{
+                            background: 'none', border: '1px solid var(--accent)', borderRadius: 'var(--radius-sm)',
+                            color: 'var(--accent)', fontSize: 'var(--text-xs)', padding: '0.1rem 0.4rem', cursor: 'pointer',
+                          }}
+                          disabled={addingMemberId === u.id}
+                          onClick={() => handleAddMember(u.id)}
+                        >{addingMemberId === u.id ? 'Adding...' : '+ Add'}</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {addMemberError && (
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger-muted)', marginTop: '0.25rem' }}>{addMemberError}</div>
+                )}
+              </div>
+            )}
 
             {conversation.slug && (
               <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-light)' }}>

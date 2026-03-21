@@ -396,6 +396,48 @@ export function isIdentityReady() {
 }
 
 /**
+ * Initialize crypto identity for guest users.
+ * Generates an ECDH keypair and registers a device under the guest session ID.
+ * Unlike initializeIdentity(), this does not persist keys to IndexedDB
+ * (guest sessions are ephemeral — sessionStorage dies on tab close).
+ */
+export async function initializeGuestCrypto() {
+  // Already initialized for this session?
+  if (ecdhKeypair && identityKeypair && deviceId) return;
+
+  // Check sessionStorage for an existing device ID from this session
+  const storedDeviceId = sessionStorage.getItem('blink-guest-device-id');
+  if (storedDeviceId && ecdhKeypair && identityKeypair) {
+    deviceId = storedDeviceId;
+    return;
+  }
+
+  // Generate fresh keypairs
+  if (!identityKeypair) {
+    identityKeypair = await engine.generateIdentityKey();
+  }
+  if (!ecdhKeypair) {
+    ecdhKeypair = await engine.generateECDHKey();
+  }
+
+  // Register device on server (guest JWT is auto-attached by API interceptor)
+  try {
+    const device = await registerDevice(
+      identityKeypair.publicKey,
+      ecdhKeypair.publicKey,
+      'guest-device',
+    );
+    deviceId = device.id;
+    // Store in sessionStorage (not localStorage) since guests are ephemeral
+    sessionStorage.setItem('blink-guest-device-id', deviceId);
+    console.log('[crypto] Guest device registered:', deviceId);
+  } catch (err) {
+    console.error('[crypto] Guest device registration failed:', err.message);
+    throw err;
+  }
+}
+
+/**
  * Migrate ephemeral keys from old localStorage format (private-key-only)
  * to the new full-keypair format in IndexedDB.  Old keys are deleted because
  * they are missing the public key component and cannot be verified.
@@ -795,6 +837,14 @@ export function getConversationRootKey(conversationId) {
 
 export function getDeviceId() {
   return deviceId;
+}
+
+/**
+ * Get the device ECDH private key (JWK) for pairwise key derivation in group crypto.
+ * Returns null if identity not initialized.
+ */
+export function getECDHPrivateKey() {
+  return ecdhKeypair ? ecdhKeypair.privateKey : null;
 }
 
 // ---------------------------------------------------------------------------

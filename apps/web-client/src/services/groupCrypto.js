@@ -1,9 +1,13 @@
 // Group E2E encryption service — Sender Key protocol.
 //
 // Each group member generates a 256-bit AES sender key and distributes
-// encrypted copies to every other member via virtual pairwise ECDH channels.
+// encrypted copies to every other member via pairwise ECDH-derived channels.
 // Messages are encrypted O(1) with the sender's key; decryption looks up
 // the sender's key by userId.
+//
+// Wrapping keys for sender key distribution are derived from real ECDH
+// shared secrets between each pair of participants (using their device
+// ECDH keypairs), ensuring the server cannot derive wrapping keys.
 //
 // A symmetric chain ratchet (identical to the DM ratchet) derives a unique
 // message key per message, providing forward secrecy within a session.
@@ -13,10 +17,14 @@ import {
   getSenderKeys,
   storeSenderKeys,
   deleteSenderKeys,
+  getUserDevices,
 } from './api.js';
 import {
   joinConversation,
 } from './socket.js';
+import {
+  getECDHPrivateKey,
+} from './cryptoService.js';
 
 const engine = new CryptoEngine(new BrowserProvider());
 
@@ -39,6 +47,14 @@ const groupConversations = new Map();
 
 // Per-conversation setup lock to prevent concurrent setupGroupKeys calls
 const groupSetupLocks = new Map();
+
+// Cache of pairwise wrapping keys: `${myUserId}:${peerId}` -> Uint8Array
+// Derived from ECDH(myPrivateKey, peerPublicKey). Cleared on logout.
+const pairwiseKeyCache = new Map();
+
+// Cache of peer ECDH public keys: userId -> JsonWebKey
+// Fetched from GET /api/devices/:userId. Cleared on logout.
+const peerECDHPublicKeys = new Map();
 
 // ---------------------------------------------------------------------------
 // IndexedDB helpers (reuse crypto service's DB)
@@ -110,37 +126,95 @@ async function deleteKey(key) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Pairwise ECDH key derivation (the core E2E fix)
 // ---------------------------------------------------------------------------
 
 /**
- * Derive a symmetric wrapping key for sender-key distribution.
+ * Fetch a peer's ECDH public key from the server (cached).
+ * Each user's device has an ECDH P-256 public key registered.
+ */
+async function _getPeerECDHPublicKey(peerId) {
+  const cached = peerECDHPublicKeys.get(peerId);
+  if (cached) return cached;
+
+  const devices = await getUserDevices(peerId);
+  if (!devices || devices.length === 0) {
+    throw new Error(`No devices found for user ${peerId}`);
+  }
+
+  // Use the most recently created device's ECDH public key
+  const sorted = [...devices].sort((a, b) =>
+    (b.createdAt || 0) - (a.createdAt || 0)
+  );
+  const pubKey = sorted[0].ecdhPublicKey;
+  if (!pubKey) {
+    throw new Error(`No ECDH public key for user ${peerId}`);
+  }
+
+  peerECDHPublicKeys.set(peerId, pubKey);
+  return pubKey;
+}
+
+/**
+ * Derive a pairwise shared secret from our ECDH private key and a peer's
+ * ECDH public key, then derive a wrapping key unique to (conversation, sender, recipient).
  *
- * Instead of virtual pairwise ECDH channels (which can't work because
- * the server's key-exchange routes require real conversation UUIDs),
- * we derive a deterministic wrapping key from:
- *   HKDF(conversationId || senderUserId || recipientUserId)
+ * This replaces the old public-input-only HKDF approach. The server cannot
+ * derive these keys because it never has access to any user's ECDH private key.
  *
- * Security rationale:
- * - The server enforces that only authenticated participants can GET/POST
- *   sender key copies, so the wrapping adds defence-in-depth.
- * - The HKDF output is unique per (conversation, sender, recipient) triple.
- * - An attacker without a valid JWT can never reach the endpoint.
+ * @param {string} conversationId
+ * @param {string} senderUserId — the sender of the sender key
+ * @param {string} recipientUserId — the intended recipient
+ * @returns {Promise<Uint8Array>} — 256-bit AES wrapping key
  */
 async function _deriveWrappingKey(conversationId, senderUserId, recipientUserId) {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) throw new Error('Web Crypto API not available');
 
-  const encoder = new TextEncoder();
-  const ikm = encoder.encode(`blink-group-wrap:${conversationId}:${senderUserId}:${recipientUserId}`);
+  // Determine which user is "us" and which is the peer
+  const myUserId = _getCurrentUserId();
+  const peerId = (senderUserId === myUserId) ? recipientUserId : senderUserId;
 
-  const baseKey = await subtle.importKey('raw', ikm, { name: 'HKDF' }, false, ['deriveBits']);
+  // Check cache for pairwise base key
+  // Use a canonical key (sorted user IDs) so both sides derive the same base key
+  const cacheKey = [myUserId, peerId].sort().join(':');
+  let pairwiseSecret = pairwiseKeyCache.get(cacheKey);
+
+  if (!pairwiseSecret) {
+    // Get our ECDH private key
+    const myPrivateKey = getECDHPrivateKey();
+    if (!myPrivateKey) {
+      throw new Error('ECDH private key not available — identity not initialized');
+    }
+
+    // Get peer's ECDH public key
+    const peerPublicKey = await _getPeerECDHPublicKey(peerId);
+
+    // Derive ECDH shared secret
+    pairwiseSecret = await engine.deriveSharedSecret(myPrivateKey, peerPublicKey);
+    pairwiseKeyCache.set(cacheKey, pairwiseSecret);
+  }
+
+  // Derive a conversation-specific wrapping key from the pairwise secret
+  // using HKDF with conversation + user context to ensure uniqueness
+  const encoder = new TextEncoder();
+  const keyMaterial = pairwiseSecret.buffer.slice(
+    pairwiseSecret.byteOffset,
+    pairwiseSecret.byteOffset + pairwiseSecret.byteLength,
+  );
+  const baseKey = await subtle.importKey('raw', keyMaterial, { name: 'HKDF' }, false, ['deriveBits']);
+
+  // Salt: conversation ID (binds key to this group)
+  // Info: sender + recipient IDs (ensures unique key per direction)
+  const salt = encoder.encode(conversationId);
+  const info = encoder.encode(`blink-group-wrap-v2:${senderUserId}:${recipientUserId}`);
+
   const bits = await subtle.deriveBits(
     {
       name: 'HKDF',
       hash: 'SHA-256',
-      salt: new Uint8Array(32), // static zero salt
-      info: encoder.encode('sender-key-wrap-v1'),
+      salt,
+      info,
     },
     baseKey,
     256,
@@ -238,7 +312,7 @@ export function unregisterGroupConversation(conversationId) {
  * Initialize group crypto for a conversation.
  *
  * 1. Generate (or reload) my sender key
- * 2. Encrypt my sender key for each other participant (wrapping key from HKDF)
+ * 2. Encrypt my sender key for each other participant using ECDH pairwise keys
  * 3. POST encrypted copies to server
  * 4. Fetch and decrypt other participants' sender keys
  *
@@ -304,7 +378,7 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
     console.log('[groupCrypto] Generated new sender key for', conversationId.slice(0, 8));
   }
 
-  // 2. For each other participant, encrypt my sender key with a derived wrapping key
+  // 2. For each other participant, encrypt my sender key with ECDH-derived pairwise wrapping key
   const otherIds = participantIds.filter((id) => id !== myUserId);
   const keyCopies = [];
 
@@ -372,7 +446,7 @@ async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps
       if (existing && existing.keyGeneration >= keyGeneration) continue;
 
       try {
-        // Derive the same wrapping key the sender used for us
+        // Derive the same wrapping key the sender used for us via ECDH
         const wrapKey = await _deriveWrappingKey(conversationId, senderUserId, myUserId);
         const senderKey = await engine.decryptSenderKey(wrapKey, encryptedSenderKey, iv);
         peerMap.set(senderUserId, { senderKey, keyGeneration });
@@ -550,7 +624,7 @@ export async function rotateMySenderKey(conversationId, myUserId, remainingParti
     console.warn('[groupCrypto] Failed to delete old sender keys:', err.message);
   }
 
-  // Encrypt and distribute to remaining participants
+  // Encrypt and distribute to remaining participants using ECDH pairwise keys
   const otherIds = remainingParticipantIds.filter((id) => id !== myUserId);
   const keyCopies = [];
 
@@ -628,6 +702,8 @@ export async function clearAllGroupKeys() {
   peerSenderKeys.clear();
   groupSendChains.clear();
   groupConversations.clear();
+  pairwiseKeyCache.clear();
+  peerECDHPublicKeys.clear();
 
   // Clean up IndexedDB
   try {
@@ -665,12 +741,19 @@ export function hasPeerSenderKey(conversationId, senderUserId) {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: get current user ID from localStorage
+// Internal: get current user ID from localStorage or sessionStorage (guests)
 // ---------------------------------------------------------------------------
 function _getCurrentUserId() {
   try {
+    // Check registered user first (localStorage)
     const raw = localStorage.getItem('blink-user');
-    return raw ? JSON.parse(raw).id : null;
+    if (raw) return JSON.parse(raw).id;
+
+    // Fall back to guest session (sessionStorage)
+    const guestRaw = sessionStorage.getItem('blink-guest-session');
+    if (guestRaw) return JSON.parse(guestRaw).guestSessionId;
+
+    return null;
   } catch {
     return null;
   }

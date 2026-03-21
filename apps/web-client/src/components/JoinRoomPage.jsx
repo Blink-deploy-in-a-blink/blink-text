@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getConversationBySlug } from '../services/api.js';
+import { getConversationBySlug, joinRoomAuthenticated } from '../services/api.js';
 import { saveGuestSession, connectGuestSocket } from '../services/guestSession.js';
 import { solvePoW } from '../services/powService.js';
 
@@ -28,6 +28,12 @@ const s = {
     background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontWeight: 600,
     fontSize: 'var(--text-md)', marginTop: '0.5rem',
   },
+  btnSecondary: {
+    width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-light)', background: 'transparent',
+    color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 500,
+    fontSize: 'var(--text-sm)', marginTop: '0.5rem',
+  },
   btnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
   error: { color: 'var(--danger-muted)', fontSize: 'var(--text-sm)', marginBottom: '0.5rem' },
   progress: { color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginTop: '0.5rem' },
@@ -38,9 +44,14 @@ const s = {
   },
   expired: { color: 'var(--danger-muted)', fontWeight: 600, fontSize: 'var(--text-md)' },
   link: { color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 },
+  divider: {
+    display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '1rem 0 0.5rem',
+    color: 'var(--text-muted)', fontSize: 'var(--text-xs)',
+  },
+  dividerLine: { flex: 1, height: '1px', background: 'var(--border-light)' },
 };
 
-export default function JoinRoomPage({ slug, onJoined }) {
+export default function JoinRoomPage({ slug, onJoined, currentUser }) {
   const [room, setRoom] = useState(null);
   const [fetchError, setFetchError] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -48,6 +59,13 @@ export default function JoinRoomPage({ slug, onJoined }) {
   const [error, setError] = useState('');
   const [phase, setPhase] = useState('idle'); // idle | solving | joining | done
   const [powProgress, setPowProgress] = useState(0);
+  const [joinMode, setJoinMode] = useState(null); // null = auto-detect, 'authenticated' | 'guest'
+
+  // Detect if user is logged in
+  const isLoggedIn = !!(currentUser || localStorage.getItem('blink-token'));
+  const loggedInUser = currentUser || (() => {
+    try { return JSON.parse(localStorage.getItem('blink-user')); } catch { return null; }
+  })();
 
   /* Fetch room info */
   useEffect(() => {
@@ -69,7 +87,37 @@ export default function JoinRoomPage({ slug, onJoined }) {
     return () => { cancelled = true; };
   }, [slug]);
 
-  const handleJoin = async () => {
+  // Auto-select join mode based on login state
+  useEffect(() => {
+    if (joinMode === null && room) {
+      setJoinMode(isLoggedIn ? 'authenticated' : 'guest');
+    }
+  }, [isLoggedIn, room, joinMode]);
+
+  const handleAuthenticatedJoin = async () => {
+    setError('');
+    if (room?.hasPassword && !password) { setError('Room requires a password'); return; }
+
+    try {
+      setPhase('joining');
+      const data = await joinRoomAuthenticated(slug, password || undefined);
+
+      setPhase('done');
+      onJoined({ ...data, joinedAsUser: true });
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Join failed';
+      // If already a member, treat as success
+      if (err.response?.status === 409 && err.response?.data?.conversationId) {
+        setPhase('done');
+        onJoined({ conversationId: err.response.data.conversationId, joinedAsUser: true });
+        return;
+      }
+      setError(msg);
+      setPhase('idle');
+    }
+  };
+
+  const handleGuestJoin = async () => {
     setError('');
     if (!displayName.trim()) { setError('Please enter a display name'); return; }
     if (room?.hasPassword && !password) { setError('Room requires a password'); return; }
@@ -185,35 +233,100 @@ export default function JoinRoomPage({ slug, onJoined }) {
           <p style={s.expired}>Room is full</p>
         ) : (
           <>
-            <label style={s.label}>Display Name</label>
-            <input style={s.input} type="text" placeholder="Your name"
-              value={displayName} onChange={(e) => setDisplayName(e.target.value)}
-              disabled={phase !== 'idle'} maxLength={32} />
-
-            {room.hasPassword && (
+            {/* Authenticated join option (logged-in users) */}
+            {isLoggedIn && loggedInUser && joinMode === 'authenticated' && (
               <>
-                <label style={s.label}>Room Password</label>
-                <input style={s.input} type="password" placeholder="Enter password"
-                  value={password} onChange={(e) => setPassword(e.target.value)}
-                  disabled={phase !== 'idle'} />
+                {room.hasPassword && (
+                  <>
+                    <label style={s.label}>Room Password</label>
+                    <input style={s.input} type="password" placeholder="Enter password"
+                      value={password} onChange={(e) => setPassword(e.target.value)}
+                      disabled={phase !== 'idle'} />
+                  </>
+                )}
+
+                {error && <p style={s.error}>{error}</p>}
+
+                <button
+                  style={{ ...s.btn, ...(phase !== 'idle' ? s.btnDisabled : {}) }}
+                  onClick={handleAuthenticatedJoin}
+                  disabled={phase !== 'idle'}
+                >
+                  {phase === 'joining' && <><span style={s.spinner} /> Joining...</>}
+                  {phase === 'done' && 'Joined!'}
+                  {phase === 'idle' && `Join as ${loggedInUser.username}`}
+                </button>
+
+                {room.allowGuests && (
+                  <>
+                    <div style={s.divider}>
+                      <span style={s.dividerLine} />
+                      <span>or</span>
+                      <span style={s.dividerLine} />
+                    </div>
+                    <button
+                      style={s.btnSecondary}
+                      onClick={() => { setJoinMode('guest'); setError(''); setPhase('idle'); }}
+                      disabled={phase !== 'idle'}
+                    >
+                      Join as Guest instead
+                    </button>
+                  </>
+                )}
               </>
             )}
 
-            {error && <p style={s.error}>{error}</p>}
+            {/* Guest join option */}
+            {joinMode === 'guest' && (
+              <>
+                <label style={s.label}>Display Name</label>
+                <input style={s.input} type="text" placeholder="Your name"
+                  value={displayName} onChange={(e) => setDisplayName(e.target.value)}
+                  disabled={phase !== 'idle'} maxLength={32} />
 
-            <button
-              style={{ ...s.btn, ...(phase !== 'idle' ? s.btnDisabled : {}) }}
-              onClick={handleJoin}
-              disabled={phase !== 'idle'}
-            >
-              {phase === 'solving' && <><span style={s.spinner} /> Solving puzzle...</>}
-              {phase === 'joining' && <><span style={s.spinner} /> Joining...</>}
-              {phase === 'done' && 'Joined!'}
-              {phase === 'idle' && 'Join Room'}
-            </button>
+                {room.hasPassword && (
+                  <>
+                    <label style={s.label}>Room Password</label>
+                    <input style={s.input} type="password" placeholder="Enter password"
+                      value={password} onChange={(e) => setPassword(e.target.value)}
+                      disabled={phase !== 'idle'} />
+                  </>
+                )}
 
-            {phase === 'solving' && powProgress > 0 && (
-              <p style={s.progress}>{powProgress.toLocaleString()} hashes computed...</p>
+                {error && <p style={s.error}>{error}</p>}
+
+                <button
+                  style={{ ...s.btn, ...(phase !== 'idle' ? s.btnDisabled : {}) }}
+                  onClick={handleGuestJoin}
+                  disabled={phase !== 'idle'}
+                >
+                  {phase === 'solving' && <><span style={s.spinner} /> Solving puzzle...</>}
+                  {phase === 'joining' && <><span style={s.spinner} /> Joining...</>}
+                  {phase === 'done' && 'Joined!'}
+                  {phase === 'idle' && 'Join as Guest'}
+                </button>
+
+                {phase === 'solving' && powProgress > 0 && (
+                  <p style={s.progress}>{powProgress.toLocaleString()} hashes computed...</p>
+                )}
+
+                {isLoggedIn && (
+                  <>
+                    <div style={s.divider}>
+                      <span style={s.dividerLine} />
+                      <span>or</span>
+                      <span style={s.dividerLine} />
+                    </div>
+                    <button
+                      style={s.btnSecondary}
+                      onClick={() => { setJoinMode('authenticated'); setError(''); setPhase('idle'); }}
+                      disabled={phase !== 'idle'}
+                    >
+                      Join as {loggedInUser?.username || 'your account'}
+                    </button>
+                  </>
+                )}
+              </>
             )}
           </>
         )}

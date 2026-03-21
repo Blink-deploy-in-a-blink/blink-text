@@ -270,3 +270,9 @@ export const updateConversationSettings = (conversationId, settings) =>
 
 export const kickMember = (conversationId, userId) =>
   api.post(`/api/conversations/${conversationId}/kick`, { userId }).then((r) => r.data);
+
+export const addMember = (conversationId, userId) =>
+  api.post(`/api/conversations/${conversationId}/members`, { userId }).then((r) => r.data);
+
+export const joinRoomAuthenticated = (slug, password) =>
+  api.post(`/api/conversations/join/${slug}/authenticated`, { password: password || undefined }).then((r) => r.data);

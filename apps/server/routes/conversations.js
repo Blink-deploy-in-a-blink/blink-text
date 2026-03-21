@@ -272,6 +272,128 @@ router.post(
   }
 );
 
+// ── POST /api/conversations/join/:slug/authenticated — join a room as a registered user ──
+router.post(
+  '/join/:slug/authenticated',
+  authenticateToken,
+  [
+    body('password').optional().isString(),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { slug } = req.params;
+    if (!slug || typeof slug !== 'string' || slug.length < 4 || slug.length > 32) {
+      return res.status(400).json({ error: 'Invalid room link' });
+    }
+
+    const { password } = req.body;
+
+    try {
+      const conv = db.prepare(
+        `SELECT id, name, invite_enabled, allow_guests, password_hash, max_participants, expires_at
+         FROM conversations WHERE slug = ?`
+      ).get(slug);
+
+      if (!conv) return res.status(404).json({ error: 'Room not found' });
+      if (!conv.invite_enabled) return res.status(403).json({ error: 'This room does not accept invites' });
+
+      // Check expiry
+      if (conv.expires_at && conv.expires_at <= Date.now()) {
+        return res.status(410).json({ error: 'This room has expired' });
+      }
+
+      // Check password
+      if (conv.password_hash) {
+        const bcrypt = require('bcryptjs');
+        if (!password || !bcrypt.compareSync(password, conv.password_hash)) {
+          return res.status(403).json({ error: 'Incorrect room password' });
+        }
+      }
+
+      // Check if user is already a participant
+      const existing = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conv.id, req.user.id);
+      if (existing) {
+        return res.status(409).json({ error: 'You are already a member of this room', conversationId: conv.id });
+      }
+
+      // Check room capacity
+      const { count: participantCount } = db.prepare(
+        'SELECT COUNT(*) as count FROM conversation_participants WHERE conversation_id = ?'
+      ).get(conv.id);
+      if (participantCount >= conv.max_participants) {
+        return res.status(409).json({ error: 'Room is full' });
+      }
+
+      // Check for blocks between the joining user and the room creator
+      const creatorRow = db.prepare('SELECT created_by FROM conversations WHERE id = ?').get(conv.id);
+      if (creatorRow) {
+        const blocked = db.prepare(
+          'SELECT 1 FROM user_blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)'
+        ).get(req.user.id, creatorRow.created_by, creatorRow.created_by, req.user.id);
+        if (blocked) {
+          return res.status(403).json({ error: 'Cannot join — blocked by room admin or you blocked the admin' });
+        }
+      }
+
+      // Add as member
+      db.prepare(
+        'INSERT INTO conversation_participants (conversation_id, user_id, role) VALUES (?, ?, ?)'
+      ).run(conv.id, req.user.id, 'member');
+
+      // Fetch enriched conversation data for the joining user
+      const enrichedConversation = db.prepare(`
+        SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
+               c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
+               c.expires_at, c.created_by,
+               GROUP_CONCAT(DISTINCT COALESCE(
+                 CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END,
+                 g.display_name,
+                 'Unknown'
+               )) AS participant_usernames,
+               GROUP_CONCAT(DISTINCT cp.user_id) AS participant_ids,
+               MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
+        FROM conversations c
+        JOIN conversation_participants cp ON cp.conversation_id = c.id
+        LEFT JOIN users u ON u.id = cp.user_id
+        LEFT JOIN guest_sessions g ON g.id = cp.user_id
+        WHERE c.id = ?
+        GROUP BY c.id
+      `).get(conv.id);
+
+      // Get the joining user's username for notifications
+      const joiningUser = db.prepare('SELECT username FROM users WHERE id = ?').get(req.user.id);
+
+      // Notify existing participants
+      const io = req.app.get('io');
+      if (io) {
+        io.to(conv.id).emit('user_joined', {
+          conversationId: conv.id,
+          userId: req.user.id,
+          displayName: joiningUser?.username || 'Unknown',
+          type: 'member',
+        });
+        // Send the full conversation object to the joining user so their client can add it
+        io.to(req.user.id).emit('new_conversation', {
+          conversation: enrichedConversation,
+        });
+      }
+
+      return res.status(201).json({
+        conversationId: conv.id,
+        conversationName: conv.name,
+        conversation: enrichedConversation,
+      });
+    } catch (err) {
+      console.error('Authenticated join error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
 // All routes below require authentication (registered users OR guests)
 router.use(authenticateAnyToken);
 
@@ -959,6 +1081,111 @@ router.put(
       return res.json({ updated: true });
     } catch (err) {
       console.error('Update settings error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── POST /api/conversations/:id/members — add a registered user to a group (admin only) ──
+router.post(
+  '/:id/members',
+  [
+    param('id').isUUID(),
+    body('userId').isString().notEmpty().withMessage('userId is required'),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      // Verify requester is admin
+      const participantRow = db.prepare(
+        'SELECT role FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, req.user.id);
+      if (!participantRow) return res.status(403).json({ error: 'Not a participant' });
+      if (participantRow.role !== 'admin') return res.status(403).json({ error: 'Only admins can add members' });
+
+      const conv = db.prepare('SELECT id, type, max_participants FROM conversations WHERE id = ?').get(req.params.id);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+      if (conv.type !== 'group_chat') return res.status(400).json({ error: 'Can only add members to group conversations' });
+
+      const { userId } = req.body;
+
+      // Cannot add yourself
+      if (userId === req.user.id) {
+        return res.status(400).json({ error: 'You are already a member' });
+      }
+
+      // Verify the target user exists (must be a registered user)
+      const targetUser = db.prepare('SELECT id, username, deleted_at FROM users WHERE id = ?').get(userId);
+      if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      if (targetUser.deleted_at) return res.status(400).json({ error: 'Cannot add a deleted user' });
+
+      // Check if already a participant
+      const existing = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(req.params.id, userId);
+      if (existing) return res.status(409).json({ error: 'User is already a participant' });
+
+      // Check room capacity
+      const { count: participantCount } = db.prepare(
+        'SELECT COUNT(*) as count FROM conversation_participants WHERE conversation_id = ?'
+      ).get(req.params.id);
+      if (participantCount >= conv.max_participants) {
+        return res.status(409).json({ error: 'Room is full' });
+      }
+
+      // Check for blocks between admin and new member
+      const blocked = db.prepare(
+        'SELECT 1 FROM user_blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)'
+      ).get(req.user.id, userId, userId, req.user.id);
+      if (blocked) {
+        return res.status(403).json({ error: 'Cannot add — one of you has blocked the other' });
+      }
+
+      // Add as member
+      db.prepare(
+        'INSERT INTO conversation_participants (conversation_id, user_id, role) VALUES (?, ?, ?)'
+      ).run(req.params.id, userId, 'member');
+
+      // Fetch enriched conversation data
+      const enrichedConversation = db.prepare(`
+        SELECT c.id, c.type, c.name, c.created_at, c.disappear_after,
+               c.slug, c.invite_enabled, c.allow_guests, c.max_participants,
+               c.expires_at, c.created_by,
+               GROUP_CONCAT(DISTINCT COALESCE(
+                 CASE WHEN u.deleted_at IS NOT NULL THEN 'Deleted User' ELSE u.username END,
+                 g.display_name,
+                 'Unknown'
+               )) AS participant_usernames,
+               GROUP_CONCAT(DISTINCT cp.user_id) AS participant_ids,
+               MAX(CASE WHEN u.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS has_deleted_participant
+        FROM conversations c
+        JOIN conversation_participants cp ON cp.conversation_id = c.id
+        LEFT JOIN users u ON u.id = cp.user_id
+        LEFT JOIN guest_sessions g ON g.id = cp.user_id
+        WHERE c.id = ?
+        GROUP BY c.id
+      `).get(req.params.id);
+
+      // Notify the room
+      const io = req.app.get('io');
+      if (io) {
+        io.to(req.params.id).emit('user_joined', {
+          conversationId: req.params.id,
+          userId,
+          displayName: targetUser.username,
+          type: 'member',
+        });
+        // Notify the added user so their client picks up the new conversation
+        io.to(userId).emit('new_conversation', {
+          conversation: enrichedConversation,
+        });
+      }
+
+      return res.status(201).json({ added: true, userId, username: targetUser.username });
+    } catch (err) {
+      console.error('Add member error:', err);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
