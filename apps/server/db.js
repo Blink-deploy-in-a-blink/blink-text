@@ -359,4 +359,32 @@ db.exec(`
   }
 }
 
+// ── Migration: remove FK on devices.user_id for guest support ──
+// Guests register devices with their guest_session_id as user_id,
+// which is not in the users table. Same pattern as other FK removals above.
+{
+  const devSchema = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE name = 'devices' AND type = 'table'"
+  ).get();
+  if (devSchema && devSchema.sql && /user_id[^,]*REFERENCES\s+users/i.test(devSchema.sql)) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE devices_new (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        device_name TEXT,
+        identity_public_key TEXT NOT NULL,
+        ecdh_public_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      INSERT INTO devices_new (id, user_id, device_name, identity_public_key, ecdh_public_key, created_at)
+        SELECT id, user_id, device_name, identity_public_key, ecdh_public_key, created_at FROM devices;
+      DROP TABLE devices;
+      ALTER TABLE devices_new RENAME TO devices;
+      CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+}
+
 module.exports = db;

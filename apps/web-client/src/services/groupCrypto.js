@@ -741,12 +741,19 @@ export function hasPeerSenderKey(conversationId, senderUserId) {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: get current user ID from localStorage
+// Internal: get current user ID from localStorage or sessionStorage (guests)
 // ---------------------------------------------------------------------------
 function _getCurrentUserId() {
   try {
+    // Check registered user first (localStorage)
     const raw = localStorage.getItem('blink-user');
-    return raw ? JSON.parse(raw).id : null;
+    if (raw) return JSON.parse(raw).id;
+
+    // Fall back to guest session (sessionStorage)
+    const guestRaw = sessionStorage.getItem('blink-guest-session');
+    if (guestRaw) return JSON.parse(guestRaw).guestSessionId;
+
+    return null;
   } catch {
     return null;
   }

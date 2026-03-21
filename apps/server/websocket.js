@@ -168,11 +168,13 @@ function registerSocketHandlers(io) {
         const deleteGuestSenderKeys = db.prepare(
           'DELETE FROM group_sender_keys WHERE conversation_id = ? AND (sender_user_id = ? OR recipient_user_id = ?)'
         );
+        const deleteGuestDevices = db.prepare('DELETE FROM devices WHERE user_id = ?');
 
         const guestCleanupTx = db.transaction(() => {
           for (const guest of staleGuests) {
             deleteGuestSenderKeys.run(guest.conversation_id, guest.id, guest.id);
             deleteGuestParticipant.run(guest.conversation_id, guest.id);
+            deleteGuestDevices.run(guest.id);
             deleteGuestSession.run(guest.id);
           }
         });

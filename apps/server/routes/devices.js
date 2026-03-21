@@ -4,7 +4,7 @@ const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
-const { authenticateToken } = require('../auth');
+const { authenticateAnyToken } = require('../auth');
 
 const router = express.Router();
 
@@ -13,7 +13,7 @@ const MAX_DEVICES_PER_USER = Number.isInteger(parsedMaxDevices) && parsedMaxDevi
   ? parsedMaxDevices
   : 5;
 
-router.use(authenticateToken);
+router.use(authenticateAnyToken);
 
 // POST /api/devices - register a new device for the authenticated user
 router.post(
