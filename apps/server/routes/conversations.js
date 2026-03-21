@@ -229,8 +229,8 @@ router.post(
       const joinTransaction = db.transaction(() => {
         // Insert guest session
         db.prepare(
-          `INSERT INTO guest_sessions (id, conversation_id, display_name, ip_hash, created_at, last_seen_at)
-           VALUES (?, ?, ?, ?, ?, ?)`
+          `INSERT INTO guest_sessions (id, conversation_id, display_name, token_hash, ip_hash, created_at, last_seen_at)
+           VALUES (?, ?, ?, '', ?, ?, ?)`
         ).run(guestId, conv.id, displayName, ipHash, now, now);
 
         // Add as participant
