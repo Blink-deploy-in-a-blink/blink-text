@@ -663,17 +663,7 @@ export default function App() {
 
   // Handle /#/r/:slug — room invite link (shown whether logged in or not)
   if (hashRoute.route === 'room') {
-    return (
-      <JoinRoomPage
-        slug={hashRoute.slug}
-        onJoined={(data) => {
-          // After joining, transition to guest chat mode
-          window.location.hash = '#/';
-          setHashRoute({ route: 'main' });
-          setGuestSession(getGuestSession());
-        }}
-      />
-    );
+    return <MaintenancePage />;
   }
 
   // Guest mode: show the guest chat view for the joined room
