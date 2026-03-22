@@ -30,10 +30,22 @@ router.post(
     const { identityPublicKey, ecdhPublicKey, deviceName } = req.body;
 
     try {
-      // Enforce per-user device limit to prevent database exhaustion
+      // Enforce per-user device limit to prevent database exhaustion.
+      // When the limit is reached, auto-purge the oldest device(s) instead of
+      // returning 400.  Each login generates fresh identity + ECDH keys and the
+      // old device record is an orphan (the client already wiped its local copy
+      // on logout), so removing the oldest is safe.
       const deviceCount = db.prepare('SELECT COUNT(*) as count FROM devices WHERE user_id = ?').get(req.user.id).count;
       if (deviceCount >= MAX_DEVICES_PER_USER) {
-        return res.status(400).json({ error: `Maximum device limit (${MAX_DEVICES_PER_USER}) reached. Remove a device first.` });
+        const excess = deviceCount - MAX_DEVICES_PER_USER + 1; // free up at least one slot
+        const oldest = db.prepare(
+          'SELECT id FROM devices WHERE user_id = ? ORDER BY created_at ASC LIMIT ?'
+        ).all(req.user.id, excess);
+        const deleteDevice = db.prepare('DELETE FROM devices WHERE id = ?');
+        for (const d of oldest) {
+          deleteDevice.run(d.id);
+        }
+        console.log(`[devices] Auto-purged ${oldest.length} stale device(s) for user ${req.user.id}`);
       }
 
       const id = uuidv4();

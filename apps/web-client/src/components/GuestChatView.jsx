@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useMessages } from '../hooks/useMessages.js';
 import { getSocket, joinConversation } from '../services/socket.js';
 import { getGuestSession, isGuestRoomExpired, leaveGuestSession, registerGuestEventHandlers } from '../services/guestSession.js';
-import { registerGroupConversation, setupGroupKeys } from '../services/groupCrypto.js';
+import { registerGroupConversation, setupGroupKeys, handleSenderKeyDistributed, handleSenderKeyRequest, handleGroupPairwiseExchange } from '../services/groupCrypto.js';
 import { getParticipants } from '../services/api.js';
 import { emitSenderKeyDistributed } from '../services/socket.js';
 import ChatWindow from './ChatWindow.jsx';
@@ -41,7 +41,6 @@ export default function GuestChatView({ guestSession, onLeave }) {
   const [kicked, setKicked] = useState(false);
   const [expired, setExpired] = useState(() => isGuestRoomExpired());
   const [groupKeysReady, setGroupKeysReady] = useState(false);
-  const setupDone = useRef(false);
 
   // Build conversation object with live participant data
   const [participantIds, setParticipantIds] = useState('');
@@ -69,29 +68,31 @@ export default function GuestChatView({ guestSession, onLeave }) {
     }
   }, [conversationId]);
 
-  // Register group conversation + set up keys
+  // Register group conversation + set up keys.
+  // No setupDone ref — setupGroupKeys has its own per-conversation lock and
+  // short-circuits if keys already exist, so repeated calls are safe.
+  // This ensures crypto state is restored on remount / page reload.
   useEffect(() => {
-    if (setupDone.current) return;
-    setupDone.current = true;
-
     registerGroupConversation(conversationId);
     joinConversation(conversationId);
 
-    // Set up group sender keys
+    let cancelled = false;
     (async () => {
       try {
         const participants = await refreshParticipants();
+        if (cancelled) return;
         const pIds = participants.map((p) => p.user_id || p.id);
         await setupGroupKeys(conversationId, guestSessionId, pIds, {
           emitSenderKeyDistributed,
         });
-        setGroupKeysReady(true);
+        if (!cancelled) setGroupKeysReady(true);
       } catch (err) {
         console.warn('[GuestChat] Group key setup failed:', err.message);
-        // Still allow viewing — messages may just show [unable to decrypt]
-        setGroupKeysReady(true);
+        if (!cancelled) setGroupKeysReady(true);
       }
     })();
+
+    return () => { cancelled = true; };
   }, [conversationId, guestSessionId, refreshParticipants]);
 
   // Refresh participant list when someone joins or leaves
@@ -119,6 +120,53 @@ export default function GuestChatView({ guestSession, onLeave }) {
       onExpired: () => setExpired(true),
     });
   }, []);
+
+  // Global sender key handlers for the guest context
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const deps = {
+      emitSenderKeyDistributed,
+      getMyUserId: () => guestSessionId,
+    };
+
+    const onSenderKeyDistributed = async ({ conversationId: cid, senderUserId }) => {
+      if (cid !== conversationId) return;
+      try {
+        await handleSenderKeyDistributed(conversationId, senderUserId, deps);
+      } catch (err) {
+        console.warn('[guest] sender_key_distributed failed:', err.message);
+      }
+    };
+
+    const onSenderKeyRequest = async ({ conversationId: cid, requestingUserId }) => {
+      if (cid !== conversationId) return;
+      try {
+        await handleSenderKeyRequest(conversationId, requestingUserId, deps);
+      } catch (err) {
+        console.warn('[guest] sender_key_request failed:', err.message);
+      }
+    };
+
+    const onGroupPairwiseExchange = async ({ conversationId: cid, fromUserId }) => {
+      if (cid !== conversationId) return;
+      try {
+        await handleGroupPairwiseExchange(conversationId, fromUserId, guestSessionId, deps);
+      } catch (err) {
+        console.warn('[guest] group_pairwise_exchange failed:', err.message);
+      }
+    };
+
+    socket.on('sender_key_distributed', onSenderKeyDistributed);
+    socket.on('sender_key_request', onSenderKeyRequest);
+    socket.on('group_pairwise_exchange', onGroupPairwiseExchange);
+    return () => {
+      socket.off('sender_key_distributed', onSenderKeyDistributed);
+      socket.off('sender_key_request', onSenderKeyRequest);
+      socket.off('group_pairwise_exchange', onGroupPairwiseExchange);
+    };
+  }, [conversationId, guestSessionId]);
 
   // Use the standard messages hook
   const {

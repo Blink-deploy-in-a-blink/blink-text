@@ -13,9 +13,13 @@ import {
   getSenderKeys,
   storeSenderKeys,
   deleteSenderKeys,
+  publishPairwiseKey,
+  getPairwiseKeys,
 } from './api.js';
 import {
   joinConversation,
+  emitGroupPairwiseExchange,
+  emitSenderKeyRequest,
 } from './socket.js';
 
 const engine = new CryptoEngine(new BrowserProvider());
@@ -39,6 +43,10 @@ const groupConversations = new Map();
 
 // Per-conversation setup lock to prevent concurrent setupGroupKeys calls
 const groupSetupLocks = new Map();
+
+// Pairwise ECDH state for sender key wrapping:
+// conversationId -> Map<peerId, { myPrivateKey: JWK, myPublicKey: JWK, pairwiseKey: Uint8Array | null }>
+const pairwiseKeyState = new Map();
 
 // ---------------------------------------------------------------------------
 // IndexedDB helpers (reuse crypto service's DB)
@@ -110,42 +118,172 @@ async function deleteKey(key) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Pairwise ECDH helpers — real key exchange for sender key wrapping
 // ---------------------------------------------------------------------------
 
 /**
- * Derive a symmetric wrapping key for sender-key distribution.
- *
- * Instead of virtual pairwise ECDH channels (which can't work because
- * the server's key-exchange routes require real conversation UUIDs),
- * we derive a deterministic wrapping key from:
- *   HKDF(conversationId || senderUserId || recipientUserId)
- *
- * Security rationale:
- * - The server enforces that only authenticated participants can GET/POST
- *   sender key copies, so the wrapping adds defence-in-depth.
- * - The HKDF output is unique per (conversation, sender, recipient) triple.
- * - An attacker without a valid JWT can never reach the endpoint.
+ * Compute a deterministic pairwise ID for two users in a conversation.
+ * Sorted so both sides compute the same ID.
  */
-async function _deriveWrappingKey(conversationId, senderUserId, recipientUserId) {
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle) throw new Error('Web Crypto API not available');
+function _pairwiseId(conversationId, userIdA, userIdB) {
+  const sorted = [userIdA, userIdB].sort();
+  return `${conversationId}:pair:${sorted[0]}:${sorted[1]}`;
+}
 
-  const encoder = new TextEncoder();
-  const ikm = encoder.encode(`blink-group-wrap:${conversationId}:${senderUserId}:${recipientUserId}`);
+/**
+ * Get or establish a pairwise wrapping key with a specific peer.
+ *
+ * Flow:
+ * 1. Check in-memory cache
+ * 2. Check IndexedDB for a previously completed handshake
+ * 3. If not found, generate ECDH keypair and publish our public key
+ * 4. Fetch the peer's published key
+ * 5. If peer key exists, complete ECDH → derive pairwise key
+ * 6. If peer key doesn't exist yet, return null (will complete later)
+ *
+ * @returns {Promise<Uint8Array|null>} The pairwise wrapping key, or null if handshake incomplete
+ */
+async function _ensurePairwiseKey(conversationId, myUserId, peerId) {
+  // 1. Check in-memory cache
+  const convMap = pairwiseKeyState.get(conversationId);
+  const cached = convMap?.get(peerId);
+  if (cached?.pairwiseKey) return cached.pairwiseKey;
 
-  const baseKey = await subtle.importKey('raw', ikm, { name: 'HKDF' }, false, ['deriveBits']);
-  const bits = await subtle.deriveBits(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: new Uint8Array(32), // static zero salt
-      info: encoder.encode('sender-key-wrap-v1'),
-    },
-    baseKey,
-    256,
+  const pairId = _pairwiseId(conversationId, myUserId, peerId);
+  const idbKey = `group-pair-${pairId}`;
+
+  // 2. Check IndexedDB
+  const stored = await loadKey(idbKey);
+  if (stored?.pairwiseKey) {
+    const pairwiseKey = stored.pairwiseKey instanceof Uint8Array
+      ? stored.pairwiseKey
+      : new Uint8Array(stored.pairwiseKey);
+    // Cache in memory
+    if (!pairwiseKeyState.has(conversationId)) pairwiseKeyState.set(conversationId, new Map());
+    pairwiseKeyState.get(conversationId).set(peerId, {
+      myPrivateKey: stored.myPrivateKey,
+      myPublicKey: stored.myPublicKey,
+      pairwiseKey,
+    });
+    return pairwiseKey;
+  }
+
+  // 3. Generate fresh ECDH keypair (or reuse one we already published)
+  let myPrivateKey, myPublicKey;
+  if (cached?.myPrivateKey) {
+    myPrivateKey = cached.myPrivateKey;
+    myPublicKey = cached.myPublicKey;
+  } else if (stored?.myPrivateKey) {
+    myPrivateKey = stored.myPrivateKey;
+    myPublicKey = stored.myPublicKey;
+  } else {
+    const kp = await engine.generateECDHKey();
+    myPrivateKey = kp.privateKey;
+    myPublicKey = kp.publicKey;
+  }
+
+  // Publish our public key for this peer
+  try {
+    await publishPairwiseKey(conversationId, peerId, myPublicKey);
+  } catch (err) {
+    console.warn('[groupCrypto] Failed to publish pairwise key for', peerId.slice(0, 8), ':', err.message);
+  }
+
+  // Notify the peer via socket so they can complete the handshake
+  emitGroupPairwiseExchange(conversationId, peerId);
+
+  // 4. Fetch peer's published key for us
+  let peerPublicKey = null;
+  try {
+    const response = await getPairwiseKeys(conversationId);
+    const keys = response.pairwiseKeys || [];
+    // Find the key the peer published for us (userId = peer, peerUserId = me)
+    const peerEntry = keys.find(
+      (k) => k.userId === peerId && k.peerUserId === myUserId
+    );
+    if (peerEntry) {
+      peerPublicKey = peerEntry.ephemeralPublicKey;
+    }
+  } catch (err) {
+    console.warn('[groupCrypto] Failed to fetch pairwise keys:', err.message);
+  }
+
+  if (!peerPublicKey) {
+    // Peer hasn't published yet — store our keypair and return null
+    if (!pairwiseKeyState.has(conversationId)) pairwiseKeyState.set(conversationId, new Map());
+    pairwiseKeyState.get(conversationId).set(peerId, {
+      myPrivateKey, myPublicKey, pairwiseKey: null,
+    });
+    await saveKey(idbKey, { myPrivateKey, myPublicKey, pairwiseKey: null });
+    console.log('[groupCrypto] Pairwise handshake pending for', peerId.slice(0, 8));
+    return null;
+  }
+
+  // 5. Complete ECDH → derive pairwise key
+  const pairwiseKey = await engine.deriveConversationKeyFromExchange(
+    myPrivateKey, peerPublicKey, pairId
   );
-  return new Uint8Array(bits);
+
+  // Store in memory + IndexedDB
+  if (!pairwiseKeyState.has(conversationId)) pairwiseKeyState.set(conversationId, new Map());
+  pairwiseKeyState.get(conversationId).set(peerId, {
+    myPrivateKey, myPublicKey, pairwiseKey,
+  });
+  await saveKey(idbKey, { myPrivateKey, myPublicKey, pairwiseKey });
+  console.log('[groupCrypto] Pairwise key established with', peerId.slice(0, 8));
+
+  return pairwiseKey;
+}
+
+/**
+ * Handle incoming group_pairwise_exchange event — a peer published their key for us.
+ * Complete the ECDH handshake, then:
+ *   (a) fetch+decrypt any pending sender keys FROM the peer
+ *   (b) wrap+store our own sender key FOR the peer (it was skipped during initial setup
+ *       because the pairwise handshake wasn't complete yet)
+ */
+export async function handleGroupPairwiseExchange(conversationId, fromUserId, myUserId, deps) {
+  const pairwiseKey = await _ensurePairwiseKey(conversationId, myUserId, fromUserId);
+  if (pairwiseKey) {
+    // (a) Fetch sender keys from this peer
+    await _fetchAndDecryptPeerKeys(conversationId, myUserId, [fromUserId], deps);
+
+    // (b) Distribute our sender key to this peer now that we have a pairwise key
+    await _distributeMySenderKeyToPeer(conversationId, myUserId, fromUserId, pairwiseKey, deps);
+
+    window.dispatchEvent(new CustomEvent('blink-group-key-ready', {
+      detail: { conversationId, senderUserId: fromUserId },
+    }));
+  }
+}
+
+/**
+ * Wrap and store our sender key for a specific peer using a pairwise wrapping key.
+ * Called when a pairwise handshake completes after the initial setupGroupKeys missed it.
+ */
+async function _distributeMySenderKeyToPeer(conversationId, myUserId, peerId, pairwiseKey, deps) {
+  const { emitSenderKeyDistributed } = deps || {};
+  const myKey = mySenderKeys.get(conversationId);
+  if (!myKey) {
+    console.warn('[groupCrypto] Cannot distribute sender key — no sender key for', conversationId.slice(0, 8));
+    return;
+  }
+
+  try {
+    const { ciphertext, iv } = await engine.encryptSenderKey(pairwiseKey, myKey.senderKey);
+    await storeSenderKeys(conversationId, [{
+      recipientUserId: peerId,
+      encryptedSenderKey: ciphertext,
+      iv,
+      keyGeneration: myKey.keyGeneration,
+    }]);
+    if (emitSenderKeyDistributed) {
+      emitSenderKeyDistributed(conversationId, myKey.keyGeneration);
+    }
+    console.log('[groupCrypto] Distributed sender key to', peerId.slice(0, 8), 'after pairwise handshake');
+  } catch (err) {
+    console.warn('[groupCrypto] Failed to distribute sender key to', peerId.slice(0, 8), ':', err.message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +448,13 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
 
   for (const peerId of otherIds) {
     try {
-      const wrapKey = await _deriveWrappingKey(conversationId, myUserId, peerId);
+      const wrapKey = await _ensurePairwiseKey(conversationId, myUserId, peerId);
+      if (!wrapKey) {
+        // Pairwise ECDH not yet complete — peer hasn't published their key yet.
+        // They'll get our sender key when the handshake completes.
+        console.log('[groupCrypto] Pairwise handshake pending with', peerId.slice(0, 8), '— skipping sender key wrap');
+        continue;
+      }
       const { ciphertext, iv } = await engine.encryptSenderKey(wrapKey, myKey.senderKey);
 
       keyCopies.push({
@@ -372,8 +516,12 @@ async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps
       if (existing && existing.keyGeneration >= keyGeneration) continue;
 
       try {
-        // Derive the same wrapping key the sender used for us
-        const wrapKey = await _deriveWrappingKey(conversationId, senderUserId, myUserId);
+        // Derive the pairwise wrapping key via real ECDH with the sender
+        const wrapKey = await _ensurePairwiseKey(conversationId, myUserId, senderUserId);
+        if (!wrapKey) {
+          console.log('[groupCrypto] Pairwise handshake pending with', senderUserId.slice(0, 8), '— cannot decrypt sender key yet');
+          continue;
+        }
         const senderKey = await engine.decryptSenderKey(wrapKey, encryptedSenderKey, iv);
         peerMap.set(senderUserId, { senderKey, keyGeneration });
         await saveKey(`group-pk-${conversationId}-${senderUserId}`, { senderKey, keyGeneration });
@@ -381,6 +529,14 @@ async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps
           'gen=', keyGeneration);
       } catch (err) {
         console.warn('[groupCrypto] Failed to decrypt sender key from', senderUserId.slice(0, 8), ':', err.message);
+      }
+    }
+
+    // Request sender keys from peers we still don't have keys for
+    const peerMap2 = peerSenderKeys.get(conversationId);
+    for (const peerId of otherIds) {
+      if (!peerMap2?.has(peerId)) {
+        emitSenderKeyRequest(conversationId, peerId);
       }
     }
   } catch (err) {
@@ -423,7 +579,11 @@ export async function handleSenderKeyRequest(conversationId, requestingUserId, d
   const myUserId = deps.getMyUserId();
 
   try {
-    const wrapKey = await _deriveWrappingKey(conversationId, myUserId, requestingUserId);
+    const wrapKey = await _ensurePairwiseKey(conversationId, myUserId, requestingUserId);
+    if (!wrapKey) {
+      console.log('[groupCrypto] Pairwise handshake pending with', requestingUserId.slice(0, 8), '— cannot re-distribute sender key yet');
+      return;
+    }
     const { ciphertext, iv } = await engine.encryptSenderKey(wrapKey, myKey.senderKey);
 
     await storeSenderKeys(conversationId, [{
@@ -556,7 +716,11 @@ export async function rotateMySenderKey(conversationId, myUserId, remainingParti
 
   for (const peerId of otherIds) {
     try {
-      const wrapKey = await _deriveWrappingKey(conversationId, myUserId, peerId);
+      const wrapKey = await _ensurePairwiseKey(conversationId, myUserId, peerId);
+      if (!wrapKey) {
+        console.log('[groupCrypto] Pairwise handshake pending with', peerId.slice(0, 8), '— skipping rotated key wrap');
+        continue;
+      }
       const { ciphertext, iv: encIv } = await engine.encryptSenderKey(wrapKey, senderKey);
       keyCopies.push({
         recipientUserId: peerId,
@@ -596,10 +760,11 @@ export async function clearGroupKeys(conversationId) {
   peerSenderKeys.delete(conversationId);
   groupSendChains.delete(conversationId);
   groupConversations.delete(conversationId);
+  pairwiseKeyState.delete(conversationId);
 
   await deleteKey(`group-sk-${conversationId}`);
 
-  // Clean up peer keys from IndexedDB (best-effort)
+  // Clean up peer keys + pairwise keys from IndexedDB (best-effort)
   try {
     const db = await openKeyDatabase();
     const allKeys = await new Promise((resolve, reject) => {
@@ -609,9 +774,10 @@ export async function clearGroupKeys(conversationId) {
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
     });
-    const prefix = `group-pk-${conversationId}-`;
+    const peerPrefix = `group-pk-${conversationId}-`;
+    const pairPrefix = `group-pair-${conversationId}:pair:`;
     for (const k of allKeys) {
-      if (typeof k === 'string' && k.startsWith(prefix)) {
+      if (typeof k === 'string' && (k.startsWith(peerPrefix) || k.startsWith(pairPrefix))) {
         await deleteKey(k);
       }
     }
@@ -628,6 +794,7 @@ export async function clearAllGroupKeys() {
   peerSenderKeys.clear();
   groupSendChains.clear();
   groupConversations.clear();
+  pairwiseKeyState.clear();
 
   // Clean up IndexedDB
   try {
@@ -640,7 +807,7 @@ export async function clearAllGroupKeys() {
       request.onerror = () => reject(request.error);
     });
     for (const k of allKeys) {
-      if (typeof k === 'string' && (k.startsWith('group-sk-') || k.startsWith('group-pk-'))) {
+      if (typeof k === 'string' && (k.startsWith('group-sk-') || k.startsWith('group-pk-') || k.startsWith('group-pair-'))) {
         await deleteKey(k);
       }
     }
@@ -665,12 +832,17 @@ export function hasPeerSenderKey(conversationId, senderUserId) {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: get current user ID from localStorage
+// Internal: get current user ID from localStorage (registered) or sessionStorage (guest)
 // ---------------------------------------------------------------------------
 function _getCurrentUserId() {
   try {
+    // Registered user
     const raw = localStorage.getItem('blink-user');
-    return raw ? JSON.parse(raw).id : null;
+    if (raw) return JSON.parse(raw).id;
+    // Guest user
+    const guestRaw = sessionStorage.getItem('blink-guest-session');
+    if (guestRaw) return JSON.parse(guestRaw).guestSessionId;
+    return null;
   } catch {
     return null;
   }

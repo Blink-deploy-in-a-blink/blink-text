@@ -11,8 +11,6 @@ import {
 } from '../services/cryptoService.js';
 import {
   isGroupConversation,
-  handleSenderKeyDistributed,
-  handleSenderKeyRequest,
   setupGroupKeys,
   hasGroupKeys,
   rotateMySenderKey,
@@ -338,31 +336,8 @@ export function useMessages(conversationId, myUserId) {
     socket.on('messages_expired', onMessagesExpired);
     socket.on('conversation_nuked', onConversationNuked);
 
-    // ── Group sender key socket events ──
-    const groupCryptoDeps = {
-      emitSenderKeyDistributed,
-      getMyUserId: () => myUserId,
-    };
-
-    const onSenderKeyDistributed = async ({ conversationId: cid, senderUserId }) => {
-      if (cid !== conversationId) return;
-      if (!isGroupConversation(conversationId)) return;
-      try {
-        await handleSenderKeyDistributed(conversationId, senderUserId, groupCryptoDeps);
-      } catch (err) {
-        console.warn('[useMessages] Failed to handle sender key distributed:', err.message);
-      }
-    };
-
-    const onSenderKeyRequest = async ({ conversationId: cid, requestingUserId }) => {
-      if (cid !== conversationId) return;
-      if (!isGroupConversation(conversationId)) return;
-      try {
-        await handleSenderKeyRequest(conversationId, requestingUserId, groupCryptoDeps);
-      } catch (err) {
-        console.warn('[useMessages] Failed to handle sender key request:', err.message);
-      }
-    };
+    // ── Group sender key socket events — kick/expire are kept per-conversation ──
+    // sender_key_distributed and sender_key_request are now handled globally in App.jsx
 
     const onUserKicked = async ({ conversationId: cid, kickedUserId }) => {
       if (cid !== conversationId) return;
@@ -390,8 +365,6 @@ export function useMessages(conversationId, myUserId) {
       }));
     };
 
-    socket.on('sender_key_distributed', onSenderKeyDistributed);
-    socket.on('sender_key_request', onSenderKeyRequest);
     socket.on('user_kicked', onUserKicked);
     socket.on('conversation_expired', onConversationExpired);
 
@@ -401,8 +374,6 @@ export function useMessages(conversationId, myUserId) {
       socket.off('message_edited', onMessageEdited);
       socket.off('messages_expired', onMessagesExpired);
       socket.off('conversation_nuked', onConversationNuked);
-      socket.off('sender_key_distributed', onSenderKeyDistributed);
-      socket.off('sender_key_request', onSenderKeyRequest);
       socket.off('user_kicked', onUserKicked);
       socket.off('conversation_expired', onConversationExpired);
     };

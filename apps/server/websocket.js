@@ -119,6 +119,7 @@ function registerSocketHandlers(io) {
         const deleteConvMessages = db.prepare('DELETE FROM messages WHERE conversation_id = ?');
         const deleteConvParticipants = db.prepare('DELETE FROM conversation_participants WHERE conversation_id = ?');
         const deleteConvSenderKeys = db.prepare('DELETE FROM group_sender_keys WHERE conversation_id = ?');
+        const deleteConvPairwiseKeys = db.prepare('DELETE FROM group_pairwise_keys WHERE conversation_id = ?');
         const deleteConvGuestSessions = db.prepare('DELETE FROM guest_sessions WHERE conversation_id = ?');
         const deleteConv = db.prepare('DELETE FROM conversations WHERE id = ?');
 
@@ -141,6 +142,7 @@ function registerSocketHandlers(io) {
 
             deleteConvMessages.run(conv.id);
             deleteConvSenderKeys.run(conv.id);
+            deleteConvPairwiseKeys.run(conv.id);
             deleteConvGuestSessions.run(conv.id);
             deleteConvParticipants.run(conv.id);
             deleteConv.run(conv.id);
@@ -168,10 +170,14 @@ function registerSocketHandlers(io) {
         const deleteGuestSenderKeys = db.prepare(
           'DELETE FROM group_sender_keys WHERE conversation_id = ? AND (sender_user_id = ? OR recipient_user_id = ?)'
         );
+        const deleteGuestPairwiseKeys = db.prepare(
+          'DELETE FROM group_pairwise_keys WHERE conversation_id = ? AND (user_id = ? OR peer_user_id = ?)'
+        );
 
         const guestCleanupTx = db.transaction(() => {
           for (const guest of staleGuests) {
             deleteGuestSenderKeys.run(guest.conversation_id, guest.id, guest.id);
+            deleteGuestPairwiseKeys.run(guest.conversation_id, guest.id, guest.id);
             deleteGuestParticipant.run(guest.conversation_id, guest.id);
             deleteGuestSession.run(guest.id);
           }
@@ -491,6 +497,38 @@ function registerSocketHandlers(io) {
       io.to(targetUserId).emit('sender_key_request', {
         conversationId,
         requestingUserId: userId,
+      });
+      if (typeof ack === 'function') ack({ success: true });
+    });
+
+    // ── group_pairwise_exchange: notify a peer that we've published a pairwise ECDH key ──
+    socket.on('group_pairwise_exchange', (payload, ack) => {
+      if (!payload || typeof payload !== 'object') {
+        if (typeof ack === 'function') ack({ error: 'Invalid payload' });
+        return;
+      }
+      const { conversationId, targetUserId } = payload;
+      if (!conversationId || typeof conversationId !== 'string') {
+        if (typeof ack === 'function') ack({ error: 'Missing conversationId' });
+        return;
+      }
+      if (!targetUserId || typeof targetUserId !== 'string') {
+        if (typeof ack === 'function') ack({ error: 'Missing targetUserId' });
+        return;
+      }
+
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, userId);
+      if (!participant) {
+        if (typeof ack === 'function') ack({ error: 'Not a participant' });
+        return;
+      }
+
+      // Relay to the target user so they can complete the pairwise handshake
+      io.to(targetUserId).emit('group_pairwise_exchange', {
+        conversationId,
+        fromUserId: userId,
       });
       if (typeof ack === 'function') ack({ success: true });
     });

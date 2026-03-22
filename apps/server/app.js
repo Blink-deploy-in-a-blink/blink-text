@@ -85,12 +85,24 @@ app.use(cors({
 }));
 app.use(rateLimit({
   windowMs: 60 * 1000,
-  max: 200,
+  max: 500,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests' },
 }));
 app.use(express.json({ limit: '64kb' }));
+
+// Group-key endpoints get hammered during key setup (pairwise exchange + sender key
+// distribution can fire many requests in rapid succession).  Give them a separate,
+// more generous budget so they don't eat into the global 500/min pool.
+const groupKeysLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many key-exchange requests' },
+  skip: (_req) => false,
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/conversations', conversationRoutes);
@@ -101,7 +113,7 @@ app.use('/api/media', mediaRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/blocks', blockRoutes);
-app.use('/api/group-keys', groupKeysRoutes);
+app.use('/api/group-keys', groupKeysLimiter, groupKeysRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
