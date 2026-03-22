@@ -179,4 +179,104 @@ router.delete(
   }
 );
 
+// ── POST /api/group-keys/:conversationId/pairwise ──
+// Publish an ephemeral ECDH public key for a specific peer (for pairwise wrapping key derivation).
+// Body: { peerUserId: string, ephemeralPublicKey: object (JWK) }
+router.post(
+  '/:conversationId/pairwise',
+  [
+    param('conversationId').isUUID(),
+    body('peerUserId').isString().notEmpty(),
+    body('ephemeralPublicKey').isObject().withMessage('ephemeralPublicKey must be a JWK object'),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { conversationId } = req.params;
+    const { peerUserId, ephemeralPublicKey } = req.body;
+
+    try {
+      // Verify caller is a participant
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, req.user.id);
+      if (!participant) {
+        return res.status(403).json({ error: 'Not a participant in this conversation' });
+      }
+
+      // Verify peer is also a participant
+      const peerParticipant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, peerUserId);
+      if (!peerParticipant) {
+        return res.status(400).json({ error: 'Peer is not a participant in this conversation' });
+      }
+
+      // Upsert: replace any existing key for this (conversation, user, peer) triple
+      const existing = db.prepare(
+        'SELECT id FROM group_pairwise_keys WHERE conversation_id = ? AND user_id = ? AND peer_user_id = ?'
+      ).get(conversationId, req.user.id, peerUserId);
+
+      if (existing) {
+        db.prepare(
+          'UPDATE group_pairwise_keys SET ephemeral_public_key = ?, created_at = unixepoch() WHERE id = ?'
+        ).run(JSON.stringify(ephemeralPublicKey), existing.id);
+      } else {
+        db.prepare(
+          `INSERT INTO group_pairwise_keys (id, conversation_id, user_id, peer_user_id, ephemeral_public_key)
+           VALUES (?, ?, ?, ?, ?)`
+        ).run(uuidv4(), conversationId, req.user.id, peerUserId, JSON.stringify(ephemeralPublicKey));
+      }
+
+      return res.status(201).json({ success: true });
+    } catch (err) {
+      console.error('Publish pairwise key error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ── GET /api/group-keys/:conversationId/pairwise ──
+// Fetch all pairwise ephemeral keys for the current user (keys others published for me + my own).
+router.get(
+  '/:conversationId/pairwise',
+  [param('conversationId').isUUID()],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { conversationId } = req.params;
+
+    try {
+      // Verify caller is a participant
+      const participant = db.prepare(
+        'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+      ).get(conversationId, req.user.id);
+      if (!participant) {
+        return res.status(403).json({ error: 'Not a participant in this conversation' });
+      }
+
+      // Fetch keys published FOR me (peer_user_id = me) and BY me (user_id = me)
+      const keys = db.prepare(
+        `SELECT user_id, peer_user_id, ephemeral_public_key, created_at
+         FROM group_pairwise_keys
+         WHERE conversation_id = ? AND (peer_user_id = ? OR user_id = ?)`
+      ).all(conversationId, req.user.id, req.user.id);
+
+      return res.json({
+        pairwiseKeys: keys.map((k) => ({
+          userId: k.user_id,
+          peerUserId: k.peer_user_id,
+          ephemeralPublicKey: JSON.parse(k.ephemeral_public_key),
+          createdAt: k.created_at,
+        })),
+      });
+    } catch (err) {
+      console.error('Get pairwise keys error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
 module.exports = router;

@@ -104,3 +104,14 @@ export function emitSenderKeyRequest(conversationId, targetUserId) {
     });
   }
 }
+
+/**
+ * Notify a specific user that we've published a pairwise ECDH key for them.
+ */
+export function emitGroupPairwiseExchange(conversationId, targetUserId) {
+  if (socket) {
+    socket.emit('group_pairwise_exchange', { conversationId, targetUserId }, (ack) => {
+      if (ack?.error) console.warn('[socket] group_pairwise_exchange error:', ack.error);
+    });
+  }
+}

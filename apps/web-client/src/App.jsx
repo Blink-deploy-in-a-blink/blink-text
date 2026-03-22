@@ -8,7 +8,7 @@ import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, getT
 import { getConversations } from './services/api.js';
 import { verifyAdmin } from './services/api.js';
 import { forwardMessage } from './services/forwardService.js';
-import { isGroupConversation, registerGroupConversation, setupGroupKeys } from './services/groupCrypto.js';
+import { isGroupConversation, registerGroupConversation, setupGroupKeys, handleSenderKeyDistributed, handleSenderKeyRequest, handleGroupPairwiseExchange } from './services/groupCrypto.js';
 import { emitSenderKeyDistributed } from './services/socket.js';
 import { isGuest, getGuestSession } from './services/guestSession.js';
 import Login from './components/Login.jsx';
@@ -240,6 +240,55 @@ function MessengerView({ user, logout, onShowHelp }) {
     return () => {
       socket.off('key_exchange', handleKeyExchange);
       socket.off('key_confirm', handleKeyConfirmEvent);
+    };
+  }, [user.id]);
+
+  // Global sender key socket handlers — fire for ALL group conversations,
+  // not just the active one. This ensures sender key distribution/requests
+  // are handled even when viewing a different conversation.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const groupCryptoDeps = {
+      emitSenderKeyDistributed,
+      getMyUserId: () => user.id,
+    };
+
+    const onSenderKeyDistributed = async ({ conversationId, senderUserId }) => {
+      if (!isGroupConversation(conversationId)) return;
+      try {
+        await handleSenderKeyDistributed(conversationId, senderUserId, groupCryptoDeps);
+      } catch (err) {
+        console.warn('[global] sender_key_distributed failed:', conversationId, err.message);
+      }
+    };
+
+    const onSenderKeyRequest = async ({ conversationId, requestingUserId }) => {
+      if (!isGroupConversation(conversationId)) return;
+      try {
+        await handleSenderKeyRequest(conversationId, requestingUserId, groupCryptoDeps);
+      } catch (err) {
+        console.warn('[global] sender_key_request failed:', conversationId, err.message);
+      }
+    };
+
+    const onGroupPairwiseExchange = async ({ conversationId, fromUserId }) => {
+      if (!isGroupConversation(conversationId)) return;
+      try {
+        await handleGroupPairwiseExchange(conversationId, fromUserId, user.id, groupCryptoDeps);
+      } catch (err) {
+        console.warn('[global] group_pairwise_exchange failed:', conversationId, err.message);
+      }
+    };
+
+    socket.on('sender_key_distributed', onSenderKeyDistributed);
+    socket.on('sender_key_request', onSenderKeyRequest);
+    socket.on('group_pairwise_exchange', onGroupPairwiseExchange);
+    return () => {
+      socket.off('sender_key_distributed', onSenderKeyDistributed);
+      socket.off('sender_key_request', onSenderKeyRequest);
+      socket.off('group_pairwise_exchange', onGroupPairwiseExchange);
     };
   }, [user.id]);
 
@@ -663,7 +712,32 @@ export default function App() {
 
   // Handle /#/r/:slug — room invite link (shown whether logged in or not)
   if (hashRoute.route === 'room') {
-    return <MaintenancePage />;
+    // If already in a guest session for this room, show guest chat
+    if (guestSession && !user) {
+      return (
+        <GuestChatView
+          guestSession={guestSession}
+          onLeave={() => {
+            setGuestSession(null);
+            navigateReplace('/');
+          }}
+        />
+      );
+    }
+    // Show the join page (works for both logged-in and anonymous users)
+    return (
+      <JoinRoomPage
+        slug={hashRoute.slug}
+        onJoined={(data) => {
+          setGuestSession({
+            guestSessionId: data.guestSessionId,
+            conversationId: data.conversationId,
+            conversationName: data.conversationName,
+            expiresAt: data.expiresAt,
+          });
+        }}
+      />
+    );
   }
 
   // Guest mode: show the guest chat view for the joined room

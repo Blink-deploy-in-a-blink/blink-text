@@ -256,6 +256,18 @@ router.post(
           displayName,
           type: 'guest',
         });
+
+        // Ask existing members to re-distribute their sender keys to the new joiner
+        const existingParticipants = db.prepare(
+          'SELECT user_id FROM conversation_participants WHERE conversation_id = ? AND user_id != ?'
+        ).all(conv.id, guestId);
+
+        for (const p of existingParticipants) {
+          io.to(p.user_id).emit('sender_key_request', {
+            conversationId: conv.id,
+            requestingUserId: guestId,
+          });
+        }
       }
 
       return res.status(201).json({

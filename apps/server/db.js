@@ -242,6 +242,22 @@ db.exec(`
     ON group_sender_keys(conversation_id, sender_user_id, key_generation);
 `);
 
+// ── Group pairwise keys: ephemeral ECDH public keys for pairwise wrapping key derivation ──
+db.exec(`
+  CREATE TABLE IF NOT EXISTS group_pairwise_keys (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    peer_user_id TEXT NOT NULL,
+    ephemeral_public_key TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_gpk_unique
+    ON group_pairwise_keys(conversation_id, user_id, peer_user_id);
+  CREATE INDEX IF NOT EXISTS idx_gpk_lookup
+    ON group_pairwise_keys(conversation_id, peer_user_id);
+`);
+
 // ── Guest sessions for burner rooms (no-account users) ──
 db.exec(`
   CREATE TABLE IF NOT EXISTS guest_sessions (

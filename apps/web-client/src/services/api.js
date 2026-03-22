@@ -257,6 +257,14 @@ export const storeSenderKeys = (conversationId, keys) =>
 export const deleteSenderKeys = (conversationId, senderUserId) =>
   api.delete(`/api/group-keys/${conversationId}/${senderUserId}`).then((r) => r.data);
 
+// ── Group pairwise keys (ECDH key exchange for sender key wrapping) ──
+
+export const publishPairwiseKey = (conversationId, peerUserId, ephemeralPublicKey) =>
+  api.post(`/api/group-keys/${conversationId}/pairwise`, { peerUserId, ephemeralPublicKey }).then((r) => r.data);
+
+export const getPairwiseKeys = (conversationId) =>
+  api.get(`/api/group-keys/${conversationId}/pairwise`).then((r) => r.data);
+
 // ── Invite / Room management ──
 
 export const getConversationBySlug = (slug) =>
