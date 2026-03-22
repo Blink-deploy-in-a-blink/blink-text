@@ -525,6 +525,19 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
       rows.reverse();
     }
 
+    // Fetch reactions for all returned messages in one query
+    let reactionsMap = {};
+    if (rows.length > 0) {
+      const placeholders = rows.map(() => '?').join(',');
+      const reactionRows = db.prepare(
+        `SELECT message_id, user_id, emoji FROM reactions WHERE message_id IN (${placeholders})`
+      ).all(...rows.map((r) => r.id));
+      for (const r of reactionRows) {
+        if (!reactionsMap[r.message_id]) reactionsMap[r.message_id] = [];
+        reactionsMap[r.message_id].push({ user_id: r.user_id, emoji: r.emoji });
+      }
+    }
+
     // Return messages in the canonical EncryptedMessage format
     const messages = rows.map((row) => {
       const payload = {
@@ -544,6 +557,7 @@ router.get('/:id/messages', [param('id').isUUID()], (req, res) => {
         messageType: row.message_type || 'text',
         mediaId: row.media_id || null,
         expiresAt: row.expires_at || null,
+        reactions: reactionsMap[row.id] || [],
       };
     });
 

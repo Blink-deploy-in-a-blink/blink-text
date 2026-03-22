@@ -365,8 +365,35 @@ export function useMessages(conversationId, myUserId) {
       }));
     };
 
+    const onReactionAdded = ({ message_id, user_id, username, emoji }) => {
+      if (isMounted.current) {
+        setMessages((prev) => prev.map((m) => {
+          if (m.id !== message_id) return m;
+          const reactions = m.reactions ?? [];
+          if (reactions.some((r) => r.user_id === user_id && r.emoji === emoji)) return m;
+          return { ...m, reactions: [...reactions, { user_id, username, emoji }] };
+        }));
+      }
+    };
+
+    const onReactionRemoved = ({ message_id, user_id, emoji }) => {
+      if (isMounted.current) {
+        setMessages((prev) => prev.map((m) => {
+          if (m.id !== message_id) return m;
+          return {
+            ...m,
+            reactions: (m.reactions ?? []).filter(
+              (r) => !(r.user_id === user_id && r.emoji === emoji)
+            ),
+          };
+        }));
+      }
+    };
+
     socket.on('user_kicked', onUserKicked);
     socket.on('conversation_expired', onConversationExpired);
+    socket.on('reaction_added', onReactionAdded);
+    socket.on('reaction_removed', onReactionRemoved);
 
     return () => {
       socket.off('message', onMessage);
@@ -376,6 +403,8 @@ export function useMessages(conversationId, myUserId) {
       socket.off('conversation_nuked', onConversationNuked);
       socket.off('user_kicked', onUserKicked);
       socket.off('conversation_expired', onConversationExpired);
+      socket.off('reaction_added', onReactionAdded);
+      socket.off('reaction_removed', onReactionRemoved);
     };
   }, [conversationId, myUserId]);
 

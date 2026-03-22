@@ -48,6 +48,27 @@ function createWsRateLimiter() {
   };
 }
 
+const ALLOWED_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+
+// Prepared statements for reactions (defined once, reused across all connections)
+const stmtGetMsgConversation = db.prepare('SELECT conversation_id FROM messages WHERE id = ?');
+const stmtIsParticipant = db.prepare(
+  'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+);
+const stmtInsertReaction = db.prepare(
+  'INSERT OR IGNORE INTO reactions (message_id, user_id, emoji) VALUES (?, ?, ?)'
+);
+const stmtDeleteReaction = db.prepare(
+  'DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?'
+);
+// One reaction per user: fetch & delete any existing reaction regardless of emoji
+const stmtGetUserReaction = db.prepare(
+  'SELECT emoji FROM reactions WHERE message_id = ? AND user_id = ?'
+);
+const stmtDeleteReactionByUser = db.prepare(
+  'DELETE FROM reactions WHERE message_id = ? AND user_id = ?'
+);
+
 /**
  * Registers all Socket.io event handlers on the given io instance.
  * @param {import('socket.io').Server} io
@@ -639,6 +660,64 @@ function registerSocketHandlers(io) {
         console.error('[WS] delete_message error:', err);
         if (typeof ack === 'function') ack({ error: 'Failed to delete message' });
       }
+    });
+
+    // ── reaction_add: add an emoji reaction to a message (one per user — replaces old) ──
+    socket.on('reaction_add', ({ message_id, emoji }) => {
+      if (!message_id || typeof message_id !== 'string') return;
+      if (!emoji || typeof emoji !== 'string') return;
+      if (!ALLOWED_EMOJI.includes(emoji)) return;
+
+      const msg = stmtGetMsgConversation.get(message_id);
+      if (!msg) return;
+
+      const member = stmtIsParticipant.get(msg.conversation_id, userId);
+      if (!member) return;
+
+      // Enforce one reaction per user: remove any existing reaction first
+      const existing = stmtGetUserReaction.get(message_id, userId);
+      if (existing) {
+        stmtDeleteReactionByUser.run(message_id, userId);
+        if (existing.emoji === emoji) {
+          // Same emoji clicked again → toggle off (just broadcast removal, don't re-add)
+          io.to(msg.conversation_id).emit('reaction_removed', {
+            message_id, user_id: userId, emoji,
+          });
+          return;
+        }
+        // Different emoji → broadcast removal of old emoji before adding new one
+        io.to(msg.conversation_id).emit('reaction_removed', {
+          message_id, user_id: userId, emoji: existing.emoji,
+        });
+      }
+
+      stmtInsertReaction.run(message_id, userId, emoji);
+      io.to(msg.conversation_id).emit('reaction_added', {
+        message_id,
+        user_id: userId,
+        username,
+        emoji,
+      });
+    });
+
+    // ── reaction_remove: remove an emoji reaction from a message ──
+    socket.on('reaction_remove', ({ message_id, emoji }) => {
+      if (!message_id || typeof message_id !== 'string') return;
+      if (!emoji || typeof emoji !== 'string') return;
+
+      const msg = stmtGetMsgConversation.get(message_id);
+      if (!msg) return;
+
+      const member = stmtIsParticipant.get(msg.conversation_id, userId);
+      if (!member) return;
+
+      stmtDeleteReaction.run(message_id, userId, emoji);
+
+      io.to(msg.conversation_id).emit('reaction_removed', {
+        message_id,
+        user_id: userId,
+        emoji,
+      });
     });
 
     socket.on('disconnect', () => {

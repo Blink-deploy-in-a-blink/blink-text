@@ -1,5 +1,6 @@
 node_modules/
 package-lock.json
+.claude
 *.db
 *.db-shm
 *.db-wal
@@ -10,3 +11,8 @@ build/
 *.local
 apps/server/uploads/*.enc
 package-lock.json
+DISAPPEARING-MESSAGES-PLAN.md
+GROUP-E2E-BURNER-PLAN.md
+ISSUES.md
+MESSAGE-REACTIONS-SEARCH-PLAN.md
+PLAN.md
