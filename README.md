@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://cypher.opsenq.com">Live Demo</a> ·
+  <a href="https://cypher.opsenq.com">Try Cypher</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#deploying-to-aws-ec2">Deploy</a> ·
   <a href="#contributing">Contributing</a>
@@ -43,6 +43,8 @@ Alice types a message
 
 **Key exchange** happens once per conversation using ECDH P-256. Each device generates an ephemeral keypair, shares the public half via the server, and derives a shared `AES-256-GCM` key locally using HKDF-SHA-256. The server never touches the private keys or the derived shared key.
 
+**Group encryption** uses a Sender Key protocol. Each member generates a symmetric sender key and distributes it to every other member, wrapped with a pairwise AES key derived via real ECDH between each pair. Messages are then encrypted once with the sender key and broadcast — only members holding a copy can decrypt. Late joiners receive keys on demand via an automatic catch-up handshake.
+
 ---
 
 ## Features
@@ -50,12 +52,13 @@ Alice types a message
 | Category | Features |
 |---|---|
 | **Encryption** | AES-256-GCM messages, ECDH P-256 key exchange, HKDF-SHA-256 key derivation, ECDSA P-256 identity signing |
-| **Messaging** | Real-time delivery, edit, delete (for me / for everyone), reply-to, forwarding |
+| **Messaging** | Real-time delivery, edit, delete (for me / for everyone), reply-to, forwarding, nuke chat |
+| **Disappearing messages** | Per-conversation auto-delete timers, server-side expiry cleanup every 30 s |
 | **Media** | Client-side encrypted file/image upload, full-screen preview, download |
-| **Groups** | Encrypted group chats with sender-key distribution |
-| **Guest rooms** | Shareable invite links — join without an account |
-| **Trust & Safety** | PoW anti-spam at registration, user reporting, admin moderation panel |
-| **Accounts** | Password change, account deletion, 30-day JWT with auto-refresh |
+| **Groups** | Sender Key protocol, pairwise ECDH key wrapping, late-joiner key catch-up |
+| **Guest rooms** | Shareable invite links, optional password, room expiry, max-participant cap, no account required |
+| **Trust & Safety** | PoW anti-spam, user blocking, reporting, admin moderation panel |
+| **Accounts** | Password & username change, account deletion, single-session enforcement, account lockout |
 | **Admin** | CLI-only promotion (no API endpoint), ban/unban, report review queue |
 
 ---
@@ -78,13 +81,19 @@ packages/
 |---|---|
 | `users` | Username, bcrypt hash, admin/banned flags, registration IP, soft-delete |
 | `devices` | Per-device ECDSA identity key + ECDH public key |
-| `conversations` | `direct_message` or `group_chat` |
-| `conversation_participants` | Many-to-many user ↔ conversation |
-| `messages` | Encrypted payloads only (`ciphertext`, `iv`, `version`) |
+| `conversations` | DM or group; slug, invite/guest/password settings, expiry, disappear timer |
+| `conversation_participants` | Many-to-many user ↔ conversation (supports guests) |
+| `messages` | Encrypted payloads only (`ciphertext`, `iv`, `version`), optional expiry |
 | `message_deletions` | Per-user "delete for me" soft deletes |
-| `key_exchange_data` | Ephemeral ECDH public keys for conversation bootstrap |
+| `key_exchange_data` | Ephemeral ECDH public keys for DM conversation bootstrap |
 | `media` | Metadata for encrypted media uploads |
 | `reports` | User reports with reason, linked message/conversation |
+| `user_blocks` | Block/unblock relationships between users |
+| `group_sender_keys` | Encrypted sender key copies per recipient for group E2E |
+| `group_pairwise_keys` | Ephemeral ECDH public keys for pairwise wrapping key derivation |
+| `guest_sessions` | Ephemeral no-account sessions bound to a room |
+
+Full column-level detail is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
@@ -295,9 +304,12 @@ Then rebuild the client — all visitors will see the maintenance page instead o
 |---|---|
 | Password hashing | `bcrypt` — 12 salt rounds |
 | Authentication | JWT HS256, 30-day expiry with auto-refresh |
+| Single-session enforcement | `session_nonce` in JWT — new login instantly invalidates prior session |
+| Account lockout | Brute-force protection after repeated failed logins |
 | Message encryption | AES-256-GCM, random 12-byte IV per message |
-| Key exchange | ECDH P-256 + HKDF-SHA-256 |
+| Key exchange | ECDH P-256 + HKDF-SHA-256 (DM); Sender Key + pairwise ECDH (groups) |
 | Identity signing | ECDSA P-256 |
+| Private key storage | IndexedDB only (`blink-crypto`), never `localStorage` |
 | Anti-spam | Proof-of-Work (SHA-256, difficulty 18) at registration |
 | Transport | HTTPS/WSS via Cloudflare or reverse proxy |
 | Security headers | `helmet` (CSP, HSTS, X-Frame-Options, …) |
@@ -306,7 +318,7 @@ Then rebuild the client — all visitors will see the maintenance page instead o
 | Ban enforcement | Checked on every authenticated request and WebSocket connection |
 | Admin access | CLI-only — no API endpoint can grant admin privileges |
 
-**Private keys never leave the client.** The server stores only encrypted payloads, public keys, and bcrypt hashes.
+**Private keys never leave the client.** The server stores only encrypted payloads, public keys, and bcrypt hashes. See [`docs/SECURITY.md`](docs/SECURITY.md) for the full security model.
 
 ---
 
@@ -327,15 +339,17 @@ For significant changes, open an issue first to discuss the approach.
 ### Project structure
 
 ```
-apps/server/routes/      REST API route handlers
+apps/server/routes/      REST API route handlers (auth, conversations, keys, media, blocks, …)
 apps/server/websocket.js Socket.io event handlers
 apps/web-client/src/
   components/            React UI components
   hooks/                 useAuth, useMessages, useBackgroundPreloader
-  services/              API client, crypto, socket, cache
+  services/              API client, cryptoService, groupCrypto, socket, guestSession, forwardService, …
 packages/crypto/src/     Platform-agnostic crypto engine (TypeScript)
 packages/shared/src/     Wire-format validation
 ```
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for full route, socket event, and service documentation.
 
 ---
 

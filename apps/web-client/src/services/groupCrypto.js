@@ -237,16 +237,52 @@ async function _ensurePairwiseKey(conversationId, myUserId, peerId) {
 
 /**
  * Handle incoming group_pairwise_exchange event — a peer published their key for us.
- * Complete the ECDH handshake and then fetch+decrypt any pending sender keys.
+ * Complete the ECDH handshake, then:
+ *   (a) fetch+decrypt any pending sender keys FROM the peer
+ *   (b) wrap+store our own sender key FOR the peer (it was skipped during initial setup
+ *       because the pairwise handshake wasn't complete yet)
  */
 export async function handleGroupPairwiseExchange(conversationId, fromUserId, myUserId, deps) {
   const pairwiseKey = await _ensurePairwiseKey(conversationId, myUserId, fromUserId);
   if (pairwiseKey) {
-    // Handshake complete — fetch sender keys from this peer
+    // (a) Fetch sender keys from this peer
     await _fetchAndDecryptPeerKeys(conversationId, myUserId, [fromUserId], deps);
+
+    // (b) Distribute our sender key to this peer now that we have a pairwise key
+    await _distributeMySenderKeyToPeer(conversationId, myUserId, fromUserId, pairwiseKey, deps);
+
     window.dispatchEvent(new CustomEvent('blink-group-key-ready', {
       detail: { conversationId, senderUserId: fromUserId },
     }));
+  }
+}
+
+/**
+ * Wrap and store our sender key for a specific peer using a pairwise wrapping key.
+ * Called when a pairwise handshake completes after the initial setupGroupKeys missed it.
+ */
+async function _distributeMySenderKeyToPeer(conversationId, myUserId, peerId, pairwiseKey, deps) {
+  const { emitSenderKeyDistributed } = deps || {};
+  const myKey = mySenderKeys.get(conversationId);
+  if (!myKey) {
+    console.warn('[groupCrypto] Cannot distribute sender key — no sender key for', conversationId.slice(0, 8));
+    return;
+  }
+
+  try {
+    const { ciphertext, iv } = await engine.encryptSenderKey(pairwiseKey, myKey.senderKey);
+    await storeSenderKeys(conversationId, [{
+      recipientUserId: peerId,
+      encryptedSenderKey: ciphertext,
+      iv,
+      keyGeneration: myKey.keyGeneration,
+    }]);
+    if (emitSenderKeyDistributed) {
+      emitSenderKeyDistributed(conversationId, myKey.keyGeneration);
+    }
+    console.log('[groupCrypto] Distributed sender key to', peerId.slice(0, 8), 'after pairwise handshake');
+  } catch (err) {
+    console.warn('[groupCrypto] Failed to distribute sender key to', peerId.slice(0, 8), ':', err.message);
   }
 }
 

@@ -256,7 +256,9 @@ function MessengerView({ user, logout, onShowHelp }) {
     };
 
     const onSenderKeyDistributed = async ({ conversationId, senderUserId }) => {
-      if (!isGroupConversation(conversationId)) return;
+      // Auto-register: receiving this event proves it's a group conversation.
+      // This handles the race where the event arrives before handleNewConversation.
+      if (!isGroupConversation(conversationId)) registerGroupConversation(conversationId);
       try {
         await handleSenderKeyDistributed(conversationId, senderUserId, groupCryptoDeps);
       } catch (err) {
@@ -265,7 +267,7 @@ function MessengerView({ user, logout, onShowHelp }) {
     };
 
     const onSenderKeyRequest = async ({ conversationId, requestingUserId }) => {
-      if (!isGroupConversation(conversationId)) return;
+      if (!isGroupConversation(conversationId)) registerGroupConversation(conversationId);
       try {
         await handleSenderKeyRequest(conversationId, requestingUserId, groupCryptoDeps);
       } catch (err) {
@@ -274,7 +276,7 @@ function MessengerView({ user, logout, onShowHelp }) {
     };
 
     const onGroupPairwiseExchange = async ({ conversationId, fromUserId }) => {
-      if (!isGroupConversation(conversationId)) return;
+      if (!isGroupConversation(conversationId)) registerGroupConversation(conversationId);
       try {
         await handleGroupPairwiseExchange(conversationId, fromUserId, user.id, groupCryptoDeps);
       } catch (err) {
