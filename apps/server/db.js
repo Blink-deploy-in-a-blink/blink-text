@@ -375,4 +375,16 @@ db.exec(`
   }
 }
 
+// ── Reactions: emoji reactions on messages ──
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reactions (
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL,
+    emoji      TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (message_id, user_id, emoji)
+  );
+  CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions (message_id);
+`);
+
 module.exports = db;

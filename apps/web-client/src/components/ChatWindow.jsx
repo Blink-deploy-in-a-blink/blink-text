@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react
 import { downloadMedia, updateConversationTimer, kickMember, updateInviteSettings, getParticipants } from '../services/api.js';
 import { decryptMediaForConversation } from '../services/cryptoService.js';
 import { rotateMySenderKey, isGroupConversation } from '../services/groupCrypto.js';
-import { emitSenderKeyDistributed } from '../services/socket.js';
+import { emitSenderKeyDistributed, getSocket } from '../services/socket.js';
 import MediaPreviewModal from './MediaPreviewModal.jsx';
 
 const TIMER_OPTIONS = [
@@ -121,6 +121,7 @@ const s = {
   bubbleCol: (mine) => ({
     maxWidth: '70%', display: 'flex', flexDirection: 'column',
     alignItems: mine ? 'flex-end' : 'flex-start',
+    position: 'relative',
   }),
   replyQuote: {
     padding: '0.3rem 0.6rem', borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
@@ -424,6 +425,15 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const [showGroupPanel, setShowGroupPanel] = useState(false);
   const [kickingUserId, setKickingUserId] = useState(null);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState(null);
+
+  // Close reaction picker on outside click
+  useEffect(() => {
+    if (!reactionPickerMsgId) return;
+    const close = () => setReactionPickerMsgId(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [reactionPickerMsgId]);
 
   // Close timer dropdown on outside click
   useEffect(() => {
@@ -645,6 +655,20 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
           console.error('Download failed:', err);
         }
       })();
+    }
+  };
+
+  const handleReactionToggle = (messageId, emoji) => {
+    const msg = messages.find((m) => m.id === messageId);
+    const alreadyReacted = (msg?.reactions ?? []).some(
+      (r) => r.user_id === myUserId && r.emoji === emoji
+    );
+    const socket = getSocket();
+    if (!socket) return;
+    if (alreadyReacted) {
+      socket.emit('reaction_remove', { message_id: messageId, emoji });
+    } else {
+      socket.emit('reaction_add', { message_id: messageId, emoji });
     }
   };
 
@@ -925,6 +949,53 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
               )}
 
               <div style={s.bubbleCol(mine)}>
+                {/* Emoji reaction picker — opens on smiley button click, anchored above the bubble */}
+                {reactionPickerMsgId === msg.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: 'absolute',
+                      bottom: '100%',
+                      marginBottom: 4,
+                      ...(mine ? { right: 0 } : { left: 0 }),
+                      display: 'flex',
+                      gap: 2,
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-light)',
+                      borderRadius: 24,
+                      padding: '3px 6px',
+                      boxShadow: 'var(--shadow-lg)',
+                      zIndex: 100,
+                      userSelect: 'none',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {['👍', '❤️', '😂', '😮', '😢', '🔥'].map((emoji) => {
+                      const isSelected = (msg.reactions ?? []).some(
+                        (r) => r.user_id === myUserId && r.emoji === emoji
+                      );
+                      return (
+                        <button
+                          key={emoji}
+                          onClick={() => { handleReactionToggle(msg.id, emoji); setReactionPickerMsgId(null); }}
+                          title={emoji}
+                          style={{
+                            background: isSelected ? 'rgba(99,102,241,0.25)' : 'none',
+                            border: 'none',
+                            fontSize: 19,
+                            cursor: 'pointer',
+                            padding: '2px 5px',
+                            borderRadius: 8,
+                            lineHeight: 1,
+                            transition: 'transform 0.1s',
+                          }}
+                          onMouseEnter={(ev) => (ev.currentTarget.style.transform = 'scale(1.35)')}
+                          onMouseLeave={(ev) => (ev.currentTarget.style.transform = 'scale(1)')}
+                        >{emoji}</button>
+                      );
+                    })}
+                  </div>
+                )}
                 {/* Show sender name in group conversations for other people's messages */}
                 {conversation.type === 'group_chat' && !mine && (() => {
                   const ids = (conversation.participant_ids || '').split(',').filter(Boolean);
@@ -940,22 +1011,46 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 {replyText && (
                   <div style={s.replyQuote}><span style={{display:'inline-flex',alignItems:'center',gap:'0.25rem'}}><MReplyIcon /> {replyText}</span></div>
                 )}
-                {(msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'voice') && msg.mediaId ? (
-                  <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} onPreview={setPreviewMedia} />
-                ) : (
-                  <div style={msg.plaintext === '[unable to decrypt]'
-                    ? { ...s.bubble(mine), background: 'var(--bg-elevated)', border: '1px dashed var(--border-light)', fontStyle: 'italic', color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }
-                    : msg._queued
-                    ? { ...s.bubble(mine), opacity: 0.6 }
-                    : s.bubble(mine)
-                  }>
-                    {msg.plaintext === '[unable to decrypt]'
-                      ? '🔒 This message can\'t be decrypted — encryption keys have changed'
-                      : linkifyText(msg.plaintext)}
-                    {msg.edited && <span style={s.edited}>(edited)</span>}
-                    {msg._failed && <span style={{ ...s.edited, color: 'var(--danger-muted)' }}> (failed)</span>}
-                  </div>
-                )}
+                {/* Bubble + smiley button in one row so the smiley centers only against the bubble */}
+                <div style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', alignItems: 'center', gap: 4 }}>
+                  {(msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'voice') && msg.mediaId ? (
+                    <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} onPreview={setPreviewMedia} />
+                  ) : (
+                    <div style={msg.plaintext === '[unable to decrypt]'
+                      ? { ...s.bubble(mine), background: 'var(--bg-elevated)', border: '1px dashed var(--border-light)', fontStyle: 'italic', color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }
+                      : msg._queued
+                      ? { ...s.bubble(mine), opacity: 0.6 }
+                      : s.bubble(mine)
+                    }>
+                      {msg.plaintext === '[unable to decrypt]'
+                        ? '🔒 This message can\'t be decrypted — encryption keys have changed'
+                        : linkifyText(msg.plaintext)}
+                      {msg.edited && <span style={s.edited}>(edited)</span>}
+                      {msg._failed && <span style={{ ...s.edited, color: 'var(--danger-muted)' }}> (failed)</span>}
+                    </div>
+                  )}
+                  {/* Smiley button — vertically centered against the bubble only */}
+                  {hoveredId === msg.id && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setReactionPickerMsgId((prev) => (prev === msg.id ? null : msg.id));
+                      }}
+                      title="React"
+                      style={{
+                        background: 'transparent', border: 'none',
+                        color: reactionPickerMsgId === msg.id ? 'var(--accent)' : 'var(--text-faint)',
+                        cursor: 'pointer', fontSize: '1rem',
+                        padding: '0.15rem 0.3rem',
+                        borderRadius: 'var(--radius-sm)', lineHeight: 1,
+                        flexShrink: 0,
+                        transition: 'color 0.15s',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = reactionPickerMsgId === msg.id ? 'var(--accent)' : 'var(--text-faint)')}
+                    >🙂</button>
+                  )}
+                </div>
                 <div style={s.meta(mine)}>
                   {msg._queued && (
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', marginRight: '0.25rem', opacity: 0.6 }}>
@@ -970,6 +1065,42 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                     </span>
                   )}
                 </div>
+                {/* Reaction badges */}
+                {(() => {
+                  const reactions = msg.reactions ?? [];
+                  if (reactions.length === 0) return null;
+                  const grouped = reactions.reduce((acc, r) => {
+                    if (!acc[r.emoji]) acc[r.emoji] = [];
+                    acc[r.emoji].push(r);
+                    return acc;
+                  }, {});
+                  return (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                      {Object.entries(grouped).map(([emoji, list]) => {
+                        const iMine = list.some((r) => r.user_id === myUserId);
+                        const names = list.map((r) => r.username || r.user_id?.slice(0, 8)).join(', ');
+                        return (
+                          <button
+                            key={emoji}
+                            onClick={() => handleReactionToggle(msg.id, emoji)}
+                            title={names}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 3,
+                              background: iMine ? 'rgba(99,102,241,0.22)' : 'rgba(255,255,255,0.07)',
+                              border: `1px solid ${iMine ? 'rgba(99,102,241,0.55)' : 'rgba(255,255,255,0.12)'}`,
+                              borderRadius: 12, padding: '1px 7px',
+                              cursor: 'pointer', fontSize: 13, color: 'var(--text-primary)',
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            <span style={{ fontSize: 14 }}>{emoji}</span>
+                            <span>{list.length}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
             </div>
