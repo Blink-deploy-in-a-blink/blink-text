@@ -27,6 +27,9 @@ import HelpPage from './components/HelpPage.jsx';
 import SessionExpiredModal from './components/SessionExpiredModal.jsx';
 import JoinRoomPage from './components/JoinRoomPage.jsx';
 import GuestChatView from './components/GuestChatView.jsx';
+import MaintenancePage from './components/MaintenancePage.jsx';
+
+const MAINTENANCE_MODE = import.meta.env.VITE_MAINTENANCE_MODE === 'true';
 
 const appStyles = {
   app: { display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' },
@@ -640,6 +643,10 @@ export default function App() {
     window.addEventListener('blink-session-expired', handler);
     return () => window.removeEventListener('blink-session-expired', handler);
   }, []);
+
+  if (MAINTENANCE_MODE) {
+    return <MaintenancePage />;
+  }
 
   // Show the session expired modal on top of everything
   if (sessionExpired) {
