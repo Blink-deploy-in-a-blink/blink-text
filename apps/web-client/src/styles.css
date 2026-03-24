@@ -187,12 +187,37 @@ input, textarea, select {
   50%      { opacity: 0.3; }
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes checkmark-draw {
+  from { stroke-dashoffset: 30; opacity: 0; }
+  to   { stroke-dashoffset: 0;  opacity: 1; }
+}
+
+@keyframes secure-flash {
+  0%   { opacity: 0; transform: scaleY(0.7); }
+  20%  { opacity: 1; transform: scaleY(1); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes banner-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* Utility classes */
 .animate-fadeIn     { animation: fadeIn 0.3s ease; }
 .animate-fadeInUp   { animation: fadeInUp 0.3s ease; }
 .animate-fadeInScale { animation: fadeInScale 0.2s ease; }
 .animate-slideInLeft { animation: slideInLeft 0.25s ease; }
 .animate-pulse      { animation: pulse 1.5s infinite; }
+.animate-spin       { animation: spin 0.8s linear infinite; }
+.animate-secure-flash { animation: secure-flash 2.5s ease-out forwards; }
+.animate-banner-slide-in { animation: banner-slide-in 0.2s ease; }
 
 /* ─── Nuke Chat animation ────────────────────────────────────────── */
 @keyframes nuke-flash {

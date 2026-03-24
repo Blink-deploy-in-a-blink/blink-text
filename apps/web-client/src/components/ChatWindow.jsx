@@ -424,6 +424,18 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
   const [showGroupPanel, setShowGroupPanel] = useState(false);
   const [kickingUserId, setKickingUserId] = useState(null);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const [showSecuredBanner, setShowSecuredBanner] = useState(false);
+  const prevKeyReady = useRef(keyReady);
+
+  // Flash "Secured" banner when key exchange completes
+  useEffect(() => {
+    if (!prevKeyReady.current && keyReady) {
+      setShowSecuredBanner(true);
+      const t = setTimeout(() => setShowSecuredBanner(false), 2500);
+      return () => clearTimeout(t);
+    }
+    prevKeyReady.current = keyReady;
+  }, [keyReady]);
 
   // Close timer dropdown on outside click
   useEffect(() => {
@@ -846,19 +858,47 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
         </div>
       )}
       {conversation && !keyReady && !conversation.has_deleted_participant && (
-        <div style={{
-          padding: '0.6rem 1.25rem', background: 'rgba(99, 102, 241, 0.06)',
-          borderBottom: '1px solid var(--border-light)',
-          color: 'var(--accent)', fontSize: 'var(--text-xs)', textAlign: 'center', flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+        <div className="animate-banner-slide-in" style={{
+          padding: '0.55rem 1.25rem', background: 'rgba(99, 102, 241, 0.07)',
+          borderBottom: '1px solid rgba(99,102,241,0.18)',
+          color: 'var(--accent)', fontSize: 'var(--text-xs)', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.65rem',
         }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'pulse 1.5s ease-in-out infinite', flexShrink: 0 }}>
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          {/* Animated spinner */}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}>
+            <circle cx="12" cy="12" r="10" strokeOpacity="0.2" />
+            <path d="M12 2a10 10 0 0 1 10 10" />
           </svg>
-          <span style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-            <span>Setting up encryption… <strong>{conversation.displayName || 'The other person'}</strong> needs to open this conversation once to complete the secure connection.</span>
-            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>This usually happens instantly when both users are online. You can type now — messages will be sent automatically when ready.</span>
+          <span style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+            <span style={{ fontWeight: 600 }}>
+              {conversation.type === 'group_chat'
+                ? 'Setting up group encryption…'
+                : <>Setting up end-to-end encryption with <strong>{conversation.displayName || 'the other person'}</strong>…</>
+              }
+            </span>
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+              {conversation.type === 'group_chat'
+                ? 'Exchanging keys with group members. You can type now — messages send when ready.'
+                : 'Waiting for the other person to come online. You can type now — messages send when ready.'
+              }
+            </span>
           </span>
+        </div>
+      )}
+      {showSecuredBanner && (
+        <div className="animate-secure-flash" style={{
+          padding: '0.45rem 1.25rem', background: 'rgba(74,222,128,0.1)',
+          borderBottom: '1px solid rgba(74,222,128,0.2)',
+          color: 'var(--success)', fontSize: 'var(--text-xs)', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+          pointerEvents: 'none',
+        }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            <polyline points="9 12 11 14 15 10" />
+          </svg>
+          <span style={{ fontWeight: 600 }}>End-to-end encrypted</span>
+          <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>— your messages are secure</span>
         </div>
       )}
       <div style={s.messages} ref={messagesContainerRef}>
