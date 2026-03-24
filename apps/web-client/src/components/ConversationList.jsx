@@ -3,6 +3,45 @@ import { getConversations, changePassword, changeUsername, deleteAccount, blockU
 import { getSocket, connectSocket } from '../services/socket.js';
 import { registerGroupConversation } from '../services/groupCrypto.js';
 
+/* ── Avatar helper ───────────────────────────────────────────────── */
+const AVATAR_COLORS = [
+  '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e',
+  '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6',
+];
+function avatarColor(str) {
+  let h = 0;
+  for (let i = 0; i < (str || '').length; i++) h = (h * 31 + str.charCodeAt(i)) & 0xffffffff;
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+function ConvAvatar({ name, isGroup }) {
+  if (isGroup) {
+    return (
+      <div style={{
+        width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+        background: 'var(--bg-elevated)', border: '1px solid var(--border-light)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'var(--text-muted)',
+      }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+      </div>
+    );
+  }
+  const initial = (name || '?')[0].toUpperCase();
+  return (
+    <div style={{
+      width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+      background: avatarColor(name),
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: '#fff', fontWeight: 700, fontSize: '0.875rem', userSelect: 'none',
+    }}>
+      {initial}
+    </div>
+  );
+}
+
 /* ── tiny SVG icons ── */
 const ChatIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -58,11 +97,13 @@ const s = {
   },
   list: { flex: 1, overflowY: 'auto', padding: '0.25rem 0' },
   item: (active) => ({
-    padding: '0.7rem 1rem', cursor: 'pointer',
+    padding: '0.6rem 0.85rem', cursor: 'pointer',
     background: active ? 'var(--bg-active)' : 'transparent',
     borderLeft: active ? '3px solid var(--accent)' : '3px solid transparent',
     transition: 'background 0.15s',
+    display: 'flex', alignItems: 'center', gap: '0.65rem',
   }),
+  itemContent: { flex: 1, minWidth: 0 },
   name: { color: 'var(--text-primary)', fontWeight: 500, fontSize: 'var(--text-md)' },
   sub: { color: 'var(--text-faint)', fontSize: 'var(--text-xs)', marginTop: '0.15rem' },
   empty: { color: 'var(--text-faint)', textAlign: 'center', padding: '2rem 1rem', fontSize: 'var(--text-sm)', lineHeight: 1.6 },
@@ -494,43 +535,43 @@ const ConversationList = forwardRef(function ConversationList({ activeConversati
             onTouchEnd={() => clearTimeout(longPressTimerRef.current)}
             onTouchMove={() => clearTimeout(longPressTimerRef.current)}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ ...s.name, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                {conv.type === 'group_chat' && (
-                  <span title="Group" style={{ display: 'inline-flex', color: 'var(--text-muted)', flexShrink: 0 }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <ConvAvatar name={getDisplayName(conv)} isGroup={conv.type === 'group_chat'} />
+            <div style={s.itemContent}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ ...s.name, display: 'flex', alignItems: 'center', gap: '0.35rem', overflow: 'hidden' }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {getDisplayName(conv)}
                   </span>
-                )}
-                {getDisplayName(conv)}
-                {conv.disappear_after && (
-                  <span title="Auto-delete enabled" style={{ display: 'inline-flex', color: 'var(--accent)', flexShrink: 0, opacity: 0.7 }}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                  </span>
-                )}
-                {conv.type === 'direct_message' && (() => {
-                  const peer = getPeerInfo(conv);
-                  return peer && blockedIds.has(peer.id) ? (
-                    <span title="Blocked" style={{ display: 'inline-flex', color: 'var(--danger-muted)', flexShrink: 0 }}>
-                      <BlockIcon />
+                  {conv.disappear_after && (
+                    <span title="Auto-delete enabled" style={{ display: 'inline-flex', color: 'var(--accent)', flexShrink: 0, opacity: 0.7 }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     </span>
-                  ) : null;
+                  )}
+                  {conv.type === 'direct_message' && (() => {
+                    const peer = getPeerInfo(conv);
+                    return peer && blockedIds.has(peer.id) ? (
+                      <span title="Blocked" style={{ display: 'inline-flex', color: 'var(--danger-muted)', flexShrink: 0 }}>
+                        <BlockIcon />
+                      </span>
+                    ) : null;
+                  })()}
+                </div>
+                {getUnreadCount && getUnreadCount(conv.id) > 0 && (
+                  <span style={{
+                    background: 'var(--accent)', color: '#fff', borderRadius: '10px',
+                    fontSize: 'var(--text-xs)', fontWeight: 700, padding: '0.1rem 0.45rem',
+                    minWidth: '18px', textAlign: 'center', lineHeight: '1.3', flexShrink: 0,
+                  }}>
+                    {getUnreadCount(conv.id) > 99 ? '99+' : getUnreadCount(conv.id)}
+                  </span>
+                )}
+              </div>
+              <div style={s.sub}>
+                {conv.type === 'direct_message' ? 'Direct message' : (() => {
+                  const count = (conv.participant_ids || '').split(',').filter(Boolean).length;
+                  return `Group \u00b7 ${count} member${count !== 1 ? 's' : ''}`;
                 })()}
               </div>
-              {getUnreadCount && getUnreadCount(conv.id) > 0 && (
-                <span style={{
-                  background: 'var(--accent)', color: '#fff', borderRadius: '10px',
-                  fontSize: 'var(--text-xs)', fontWeight: 700, padding: '0.1rem 0.45rem',
-                  minWidth: '18px', textAlign: 'center', lineHeight: '1.3',
-                }}>
-                  {getUnreadCount(conv.id) > 99 ? '99+' : getUnreadCount(conv.id)}
-                </span>
-              )}
-            </div>
-            <div style={s.sub}>
-              {conv.type === 'direct_message' ? 'Direct' : (() => {
-                const count = (conv.participant_ids || '').split(',').filter(Boolean).length;
-                return `Group \u00b7 ${count} member${count !== 1 ? 's' : ''}`;
-              })()}
             </div>
           </div>
         ));
