@@ -87,6 +87,9 @@ export const getMessages = (conversationId, { limit, before } = {}) => {
 export const getParticipants = (conversationId) =>
   api.get(`/api/conversations/${conversationId}/participants`).then((r) => r.data.participants);
 
+export const getConversationParticipantIds = (conversationId) =>
+  getParticipants(conversationId).then((ps) => ps.map((p) => p.id));
+
 export const registerDevice = (identityPublicKey, ecdhPublicKey, deviceName) =>
   api.post('/api/devices', { identityPublicKey, ecdhPublicKey, deviceName }).then((r) => r.data.device);
 
@@ -98,6 +101,13 @@ export const storeKeyExchange = (conversationId, deviceId, ephemeralPublicKey) =
 
 export const getKeyExchange = (conversationId) =>
   api.get(`/api/keys/exchange/${conversationId}`).then((r) => r.data.keyExchangeData);
+
+// Prekey bundle endpoints
+export const uploadPrekeys = (deviceId, signedPrekey, oneTimePrekeys) =>
+  api.post('/api/keys/prekeys', { deviceId, signedPrekey, oneTimePrekeys }).then((r) => r.data);
+
+export const getPrekeyBundle = (userId) =>
+  api.get(`/api/keys/prekeys/${userId}`).then((r) => r.data.bundle);
 
 export const searchUsers = (username) =>
   api.get('/api/users/search', { params: { q: username } }).then((r) => r.data.users);

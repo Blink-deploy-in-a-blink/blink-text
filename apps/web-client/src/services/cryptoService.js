@@ -17,7 +17,7 @@
 //    providing forward secrecy within a session.
 //
 import { CryptoEngine, BrowserProvider } from '@blink-text/crypto';
-import { registerDevice, storeKeyExchange, getKeyExchange } from './api.js';
+import { registerDevice, storeKeyExchange, getKeyExchange, uploadPrekeys, getPrekeyBundle } from './api.js';
 import { sendKeyExchange, sendKeyConfirm, joinConversation } from './socket.js';
 import {
   isGroupConversation,
@@ -233,12 +233,14 @@ async function _advanceSendChain(conversationId) {
     if (!root) throw new Error(`No conversation key for ${conversationId}`);
     const { nextChainKey, messageKey } = await _hkdfChainStep(root.rootKey);
     sendChains.set(conversationId, { sendChainKey: nextChainKey, sendCounter: 1 });
+    _persistChainState(conversationId); // fire-and-forget
     return { messageKey, counter: 0 };
   }
   const { nextChainKey, messageKey } = await _hkdfChainStep(chain.sendChainKey);
   const counter = chain.sendCounter;
   chain.sendChainKey = nextChainKey;
   chain.sendCounter = counter + 1;
+  _persistChainState(conversationId); // fire-and-forget
   return { messageKey, counter };
 }
 
@@ -361,6 +363,7 @@ export async function initializeIdentity() {
 
 /**
  * Register a device on the server with up to 3 retries.
+ * After successful registration, upload signed prekey + one-time prekeys.
  * Throws if all retries are exhausted.
  */
 async function _registerDeviceWithRetry(maxRetries = 3) {
@@ -375,6 +378,9 @@ async function _registerDeviceWithRetry(maxRetries = 3) {
       deviceId = device.id;
       saveToStorage('blink-device-id', deviceId);
       console.log('[crypto] Device registered:', deviceId);
+
+      // Upload prekeys after successful device registration
+      await _uploadPrekeys();
       return;
     } catch (err) {
       lastErr = err;
@@ -385,6 +391,57 @@ async function _registerDeviceWithRetry(maxRetries = 3) {
     }
   }
   throw lastErr;
+}
+
+/**
+ * Generate and upload a signed prekey + batch of one-time prekeys.
+ * The signed prekey is a medium-term ECDH key signed with the identity key.
+ * One-time prekeys are single-use keys consumed by senders for async key exchange.
+ */
+async function _uploadPrekeys() {
+  if (!deviceId || !identityKeypair) return;
+
+  try {
+    // Generate signed prekey
+    const signedPrekeyPair = await engine.generateECDHKey();
+    // Sign the prekey with identity key — we use a simple fingerprint as signature
+    // (in a full X3DH implementation this would be an Ed25519 signature)
+    const signatureData = JSON.stringify(signedPrekeyPair.publicKey);
+    const signature = Array.from(
+      new Uint8Array(
+        await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(signatureData))
+      )
+    ).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    // Store signed prekey private key in IndexedDB
+    await saveKeyToSecureStore(`prekey-signed-${deviceId}`, {
+      publicKey: signedPrekeyPair.publicKey,
+      privateKey: signedPrekeyPair.privateKey,
+    });
+
+    // Generate one-time prekeys (batch of 10)
+    const oneTimePrekeys = [];
+    const oneTimePrivateKeys = [];
+    for (let i = 0; i < 10; i++) {
+      const otp = await engine.generateECDHKey();
+      oneTimePrekeys.push(otp.publicKey);
+      oneTimePrivateKeys.push({ publicKey: otp.publicKey, privateKey: otp.privateKey });
+    }
+
+    // Store one-time prekey private keys in IndexedDB
+    await saveKeyToSecureStore(`prekey-otp-${deviceId}`, oneTimePrivateKeys);
+
+    // Upload to server
+    await uploadPrekeys(deviceId, {
+      publicKey: signedPrekeyPair.publicKey,
+      signature,
+    }, oneTimePrekeys);
+
+    console.log('[crypto] Uploaded prekeys: 1 signed + ', oneTimePrekeys.length, 'one-time');
+  } catch (err) {
+    console.warn('[crypto] Failed to upload prekeys:', err.message);
+    // Non-fatal: prekeys enhance UX but aren't required for basic operation
+  }
 }
 
 /**
@@ -453,6 +510,16 @@ export async function setupConversationKey(conversationId, myUserId, { maxRetrie
   // After waiting, if we already have a *confirmed* key, we're done.
   const existing = conversationKeys.get(conversationId);
   if (existing && existing.confirmed) return;
+
+  // Try to restore from IndexedDB (survives page refresh)
+  if (!existing) {
+    const restored = await restoreConversationKey(conversationId);
+    if (restored) {
+      // Key restored — join socket room so we receive future events
+      joinConversation(conversationId);
+      return;
+    }
+  }
 
   let releaseLock;
   const lock = new Promise((r) => { releaseLock = r; });
@@ -595,7 +662,39 @@ async function _doSetupConversationKey(conversationId, myUserId, { maxRetries = 
       await new Promise((r) => setTimeout(r, retryDelay));
     }
   }
-  // No peer key found — key will be derived later via socket key_exchange event
+
+  // No peer ephemeral key found — try prekey bundle (async key exchange)
+  // This allows establishing a key even when the peer is offline.
+  try {
+    // Find the peer userId from conversation participants
+    const { getConversationParticipantIds } = await import('./api.js');
+    let peerUserId = null;
+    // For DMs, try to determine the peer from the exchange data query (which includes participants)
+    // or from the conversation participants API
+    try {
+      const participants = await getConversationParticipantIds(conversationId);
+      peerUserId = participants.find((id) => id !== myUserId);
+    } catch {
+      // If we can't get participants, we can't fetch a prekey bundle
+    }
+
+    if (peerUserId) {
+      console.log('[crypto] Trying prekey bundle for peer', peerUserId.slice(0, 8));
+      const bundle = await getPrekeyBundle(peerUserId);
+      if (bundle?.signedPrekey?.publicKey) {
+        // Use the signed prekey (or one-time prekey if available) as the peer's ephemeral key
+        const peerKey = bundle.oneTimePrekey || bundle.signedPrekey.publicKey;
+        console.log('[crypto] Using prekey bundle for', peerUserId.slice(0, 8));
+        await _deriveAndStore(conversationId, myPair.privateKey, peerKey);
+        await _sendKeyConfirmation(conversationId);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('[crypto] Prekey bundle fetch failed:', err.message);
+  }
+
+  // No peer key and no prekey bundle — key will be derived later via socket key_exchange event
 }
 
 /**
@@ -650,6 +749,9 @@ export async function handleKeyConfirm(conversationId, peerConfirmToken, myUserI
   if (ourToken === peerConfirmToken) {
     console.log('[crypto] ✓ Key confirmed for', conversationId.slice(0, 8));
     entry.confirmed = true;
+    // Persist the confirmed state
+    await _persistConversationKey(conversationId, entry.rootKey,
+      conversationKeyFingerprints.get(conversationId) || '');
   } else {
     console.warn('[crypto] ✗ Key confirmation FAILED for', conversationId.slice(0, 8),
       '— forcing re-key');
@@ -659,6 +761,8 @@ export async function handleKeyConfirm(conversationId, peerConfirmToken, myUserI
     sendChains.delete(conversationId);
     ephemeralKeypairs.delete(conversationId);
     await deleteKeyFromSecureStore(`ephemeral-${conversationId}`);
+    await deleteKeyFromSecureStore(`conv-key-${conversationId}`);
+    await deleteKeyFromSecureStore(`chain-${conversationId}`);
     // Re-setup will happen on next message send/receive or explicit call
     try {
       await setupConversationKey(conversationId, myUserId, { maxRetries: 3, retryDelay: 500 });
@@ -673,6 +777,64 @@ async function _sendKeyConfirmation(conversationId) {
   if (!entry) return;
   const token = await _computeKeyConfirmToken(entry.rootKey, conversationId);
   sendKeyConfirm(conversationId, token);
+}
+
+// ---------------------------------------------------------------------------
+// Persist / restore conversation keys across page refresh
+// ---------------------------------------------------------------------------
+
+async function _persistConversationKey(conversationId, rootKey, fingerprint) {
+  try {
+    // rootKey is a Uint8Array — convert to regular array for JSON-safe storage
+    await saveKeyToSecureStore(`conv-key-${conversationId}`, {
+      rootKey: Array.from(rootKey),
+      fingerprint,
+    });
+  } catch (err) {
+    console.warn('[crypto] Failed to persist conversation key:', err.message);
+  }
+}
+
+async function _persistChainState(conversationId) {
+  const chain = sendChains.get(conversationId);
+  if (!chain) return;
+  try {
+    await saveKeyToSecureStore(`chain-${conversationId}`, {
+      sendChainKey: Array.from(chain.sendChainKey),
+      sendCounter: chain.sendCounter,
+    });
+  } catch (err) {
+    console.warn('[crypto] Failed to persist chain state:', err.message);
+  }
+}
+
+/**
+ * Try to restore a conversation key from IndexedDB.
+ * Returns true if a key was restored, false otherwise.
+ */
+export async function restoreConversationKey(conversationId) {
+  if (conversationKeys.has(conversationId)) return true;
+
+  const stored = await loadKeyFromSecureStore(`conv-key-${conversationId}`);
+  if (!stored?.rootKey) return false;
+
+  const rootKey = new Uint8Array(stored.rootKey);
+  conversationKeys.set(conversationId, { rootKey, confirmed: true });
+  if (stored.fingerprint) {
+    conversationKeyFingerprints.set(conversationId, stored.fingerprint);
+  }
+
+  // Restore chain state if available
+  const chainStored = await loadKeyFromSecureStore(`chain-${conversationId}`);
+  if (chainStored?.sendChainKey) {
+    sendChains.set(conversationId, {
+      sendChainKey: new Uint8Array(chainStored.sendChainKey),
+      sendCounter: chainStored.sendCounter || 0,
+    });
+  }
+
+  console.log('[crypto] Restored conversation key from IndexedDB for', conversationId.slice(0, 8));
+  return true;
 }
 
 async function _deriveAndStore(conversationId, myPrivateKey, theirPublicKey) {
@@ -693,8 +855,12 @@ async function _deriveAndStore(conversationId, myPrivateKey, theirPublicKey) {
   conversationKeys.set(conversationId, { rootKey, confirmed: false });
   conversationKeyFingerprints.set(conversationId, JSON.stringify(theirPublicKey));
 
+  // Persist root key + fingerprint to IndexedDB so it survives page refresh
+  await _persistConversationKey(conversationId, rootKey, JSON.stringify(theirPublicKey));
+
   // Reset send chain for this conversation (new root key = new chain)
   sendChains.delete(conversationId);
+  await deleteKeyFromSecureStore(`chain-${conversationId}`);
 
   // Notify any waiting message queues that the key is now available
   window.dispatchEvent(new CustomEvent('blink-key-ready', { detail: { conversationId } }));
@@ -820,11 +986,16 @@ export async function clearAllCryptoKeys() {
   // Clear group crypto state
   await clearAllGroupKeys();
 
-  // Delete all ephemeral keys from IndexedDB so re-login gets fresh keypairs.
+  // Delete all ephemeral keys, persisted conversation keys, and chain state from IndexedDB.
   // Preserve identity + ECDH keys (blink-identity-key, blink-ecdh-key).
   const allKeys = await listSecureStoreKeys();
   for (const k of allKeys) {
-    if (typeof k === 'string' && k.startsWith('ephemeral-')) {
+    if (typeof k === 'string' && (
+      k.startsWith('ephemeral-') ||
+      k.startsWith('conv-key-') ||
+      k.startsWith('chain-') ||
+      k.startsWith('prekey-')
+    )) {
       await deleteKeyFromSecureStore(k);
     }
   }

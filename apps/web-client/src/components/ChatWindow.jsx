@@ -943,14 +943,14 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 {(msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'voice') && msg.mediaId ? (
                   <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} onPreview={setPreviewMedia} />
                 ) : (
-                  <div style={msg.plaintext === '[unable to decrypt]'
+                  <div style={msg._undecryptable || msg.plaintext === '[unable to decrypt]'
                     ? { ...s.bubble(mine), background: 'var(--bg-elevated)', border: '1px dashed var(--border-light)', fontStyle: 'italic', color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }
                     : msg._queued
                     ? { ...s.bubble(mine), opacity: 0.6 }
                     : s.bubble(mine)
                   }>
-                    {msg.plaintext === '[unable to decrypt]'
-                      ? '🔒 This message can\'t be decrypted — encryption keys have changed'
+                    {msg._undecryptable || msg.plaintext === '[unable to decrypt]'
+                      ? '🔒 Encrypted message — key not yet available'
                       : linkifyText(msg.plaintext)}
                     {msg.edited && <span style={s.edited}>(edited)</span>}
                     {msg._failed && <span style={{ ...s.edited, color: 'var(--danger-muted)' }}> (failed)</span>}

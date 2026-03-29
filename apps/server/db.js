@@ -275,6 +275,33 @@ db.exec(`
     ON guest_sessions(conversation_id);
 `);
 
+// ── Prekey bundles: Signed Prekeys + One-Time Prekeys for async key exchange ──
+// Each device uploads a signed prekey (medium-term) and a batch of one-time prekeys.
+// When a sender wants to start a conversation with an offline user, they consume a
+// one-time prekey (deleted after use) and derive a shared secret from it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS signed_prekeys (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    public_key TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_signed_prekeys_user
+    ON signed_prekeys(user_id);
+
+  CREATE TABLE IF NOT EXISTS one_time_prekeys (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    public_key TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_otp_user
+    ON one_time_prekeys(user_id, device_id);
+`);
+
 // Unique index on conversation slug for fast public lookups
 // Drop first in case a non-unique version exists from an earlier migration
 {
