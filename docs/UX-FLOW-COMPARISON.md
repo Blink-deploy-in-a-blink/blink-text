@@ -96,7 +96,7 @@
 ### Telegram
 
 - **Cloud chats**: MTProto protocol, server-client encryption only. Server has keys. No E2E.
-- **Secret chats**: Standard Diffie-Hellman key exchange (not X3DH). Both parties must be online simultaneously. After exchange, messages are encrypted with AES-256-IGE. No Double Ratchet (MTProto 2.0 uses a simpler key derivation). Forward secrecy is limited to periodic re-keying.
+- **Secret chats**: Standard Diffie-Hellman key exchange (not X3DH). Both parties must be online simultaneously. After exchange, messages are encrypted with AES-256 (MTProto 2.0 uses AES-256-CTR with SHA-256-based key derivation, replacing the older IGE mode). No Double Ratchet — forward secrecy is limited to periodic re-keying.
 - **Failure mode**: Secret chat creation simply waits if the peer is offline. Clear status indicator.
 
 ### WhatsApp
@@ -254,7 +254,7 @@ Being a web app introduces unique challenges that native apps don't face:
 
 1. **Key re-derivation race**: On refresh, `initializeIdentity()` loads keys from IndexedDB, then each active conversation calls `setupConversationKey()` to re-derive the root key. This involves checking the server for the peer's ephemeral key. If the server or network is slow, the conversation appears empty while waiting.
 
-2. **Chain counter reset**: Because chain ratchet state is in-memory, after refresh the chain resets. If the peer sends messages with chain index N, and the refreshed client starts at 0, message decryption may produce incorrect keys for messages with higher chain indices — though the app handles this by accepting the `chainIdx` from the message payload and deriving the key at that specific counter.
+2. **Chain counter reset**: Because chain ratchet state is in-memory, after refresh the chain resets to 0. In practice this is handled gracefully — the app reads the `chainIdx` from each message payload and derives the key at that specific counter rather than relying on local state. However, if messages arrive out of order with large counter gaps after a refresh, the app must derive many intermediate keys, which can add latency.
 
 3. **Group key re-setup**: Group crypto involves re-loading sender keys from IndexedDB and re-checking pairwise ECDH state. If any pairwise key is missing from IndexedDB (e.g., evicted, corrupted, or never stored), the entire group setup stalls until that pairwise exchange is re-done.
 
@@ -359,7 +359,7 @@ Based on the deep dive into the codebase and comparison with industry standards,
 
 **What users experience**: "I refreshed the page and my entire conversation is gone. Not even the encrypted messages show. It's just empty."
 
-**What native apps do differently**: Native apps (Signal, WhatsApp, Telegram) store derived keys and message plaintext locally. Refresh/restart instantly loads cached state. There's no re-derivation step.
+**What native apps do differently**: Native apps (Signal, WhatsApp, Telegram) store derived keys and decrypted message plaintext in OS-protected encrypted local databases (e.g., SQLCipher). Refresh/restart instantly loads cached state from this encrypted store. There's no re-derivation step.
 
 **What Blink-Text could do**: Store derived root keys in IndexedDB (alongside the ephemeral keypairs) so they don't need to be re-derived on refresh. Show encrypted message stubs (with sender, timestamp, "unable to decrypt" label) even when keys aren't available, so conversations never appear empty.
 
