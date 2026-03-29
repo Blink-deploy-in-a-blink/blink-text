@@ -323,7 +323,9 @@ function MessengerView({ user, logout, onShowHelp }) {
       if (!hasConversationKey(msg.conversationId)) {
         try {
           await restoreConversationKey(msg.conversationId);
-        } catch { /* ignore */ }
+        } catch (err) {
+          console.debug('[global] Key restore failed for', msg.conversationId, err.message);
+        }
       }
 
       if (!hasConversationKey(msg.conversationId)) {

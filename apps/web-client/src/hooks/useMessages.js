@@ -54,8 +54,9 @@ export function useMessages(conversationId, myUserId) {
       try {
         const plaintext = await decryptConversationMessage(conversationId, cached.msg.payload, cached.senderId);
         retried.push({ msgId, plaintext });
-      } catch {
-        // Still can't decrypt — leave in cache
+      } catch (err) {
+        // Still can't decrypt — leave in cache for next retry
+        console.debug('[useMessages] Retry decrypt still failed for', msgId, err.message);
       }
     }
     if (retried.length === 0) return;

@@ -404,14 +404,16 @@ async function _uploadPrekeys() {
   try {
     // Generate signed prekey
     const signedPrekeyPair = await engine.generateECDHKey();
-    // Sign the prekey with identity key — we use a simple fingerprint as signature
-    // (in a full X3DH implementation this would be an Ed25519 signature)
+    // Sign the prekey with identity key — we use a SHA-256 fingerprint as a simple signature.
+    // Note: like _computeKeyConfirmToken and _hkdfChainStep in this file, this uses
+    // crypto.subtle directly because CryptoEngine doesn't expose a raw hash method.
     const signatureData = JSON.stringify(signedPrekeyPair.publicKey);
-    const signature = Array.from(
-      new Uint8Array(
-        await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(signatureData))
-      )
-    ).map(b => b.toString(16).padStart(2, '0')).join('');
+    const subtle = globalThis.crypto?.subtle;
+    const signature = subtle
+      ? Array.from(
+          new Uint8Array(await subtle.digest('SHA-256', new TextEncoder().encode(signatureData)))
+        ).map(b => b.toString(16).padStart(2, '0')).join('')
+      : signatureData.slice(0, 64); // fallback for environments without subtle
 
     // Store signed prekey private key in IndexedDB
     await saveKeyToSecureStore(`prekey-signed-${deviceId}`, {
@@ -437,7 +439,7 @@ async function _uploadPrekeys() {
       signature,
     }, oneTimePrekeys);
 
-    console.log('[crypto] Uploaded prekeys: 1 signed + ', oneTimePrekeys.length, 'one-time');
+    console.log('[crypto] Uploaded prekeys: 1 signed +', oneTimePrekeys.length, 'one-time');
   } catch (err) {
     console.warn('[crypto] Failed to upload prekeys:', err.message);
     // Non-fatal: prekeys enhance UX but aren't required for basic operation
