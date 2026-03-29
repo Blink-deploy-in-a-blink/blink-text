@@ -8,5 +8,11 @@ dist/
 build/
 .DS_Store
 *.local
+.claude
 apps/server/uploads/*.enc
 package-lock.json
+GROUP-ROOM-CRYPTO-ANALYSIS.md
+CYPHER-VS-TELEGRAM.md
+MESSAGE-REACTIONS-SEARCH-PLAN.md
+STALE-PAIRWISE-KEY-BUG-ANALYSIS.md
+GROUP-REFRESH-BUG-ANALYSIS.md

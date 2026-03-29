@@ -100,7 +100,16 @@ export default function GuestChatView({ guestSession, onLeave }) {
     const socket = getSocket();
     if (!socket) return;
     const onUserJoined = ({ conversationId: cid }) => {
-      if (cid === conversationId) refreshParticipants();
+      if (cid !== conversationId) return;
+      refreshParticipants().then((participants) => {
+        if (!participants.length) return;
+        const pIds = participants.map((p) => p.user_id || p.id);
+        setupGroupKeys(conversationId, guestSessionId, pIds, {
+          emitSenderKeyDistributed,
+        }).catch((err) => {
+          console.warn('[GuestChat] Re-setup after user_joined failed:', err.message);
+        });
+      });
     };
     const onUserKicked = ({ conversationId: cid }) => {
       if (cid === conversationId) refreshParticipants();

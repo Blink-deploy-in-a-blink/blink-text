@@ -50,16 +50,14 @@ export function useBackgroundPreloader(userId) {
 
 async function preloadConversation(conv, userId) {
   try {
-    // Skip if we already have a fresh cache
-    if (getCachedMessages(conv.id)) return;
-
     // Join the socket room
     joinConversation(conv.id);
 
     const isGroup = conv.type === 'group_chat';
 
     if (isGroup) {
-      // Register and set up group sender keys
+      // Always run group key setup even when the message cache is warm — a new member may
+      // have joined since the last load. setupGroupKeys returns early if all keys are present.
       if (!isGroupConversation(conv.id)) registerGroupConversation(conv.id);
       const participantIds = (conv.participant_ids || '').split(',').filter(Boolean);
       try {
@@ -67,9 +65,13 @@ async function preloadConversation(conv, userId) {
       } catch (err) {
         console.warn('[preloader] Group key setup failed:', conv.id, err.message);
       }
+      // Skip message cache refresh if already populated
+      if (getCachedMessages(conv.id)) return;
       if (!hasGroupKeys(conv.id)) return;
     } else {
-      // DM: Set up key with 0 retries — instant, no blocking
+      // DM: Skip entirely if already cached
+      if (getCachedMessages(conv.id)) return;
+      // Set up key with 0 retries — instant, no blocking
       await setupConversationKey(conv.id, userId, { maxRetries: 0, retryDelay: 0 });
       if (!hasConversationKey(conv.id)) return;
     }

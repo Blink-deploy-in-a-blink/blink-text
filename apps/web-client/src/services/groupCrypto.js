@@ -44,6 +44,10 @@ const groupConversations = new Map();
 // Per-conversation setup lock to prevent concurrent setupGroupKeys calls
 const groupSetupLocks = new Map();
 
+// Receive chain cache — avoids O(N) HKDF steps on every decrypt call:
+// conversationId -> Map<senderUserId, { chainKey: Uint8Array, counter: number }>
+const groupReceiveChains = new Map();
+
 // Pairwise ECDH state for sender key wrapping:
 // conversationId -> Map<peerId, { myPrivateKey: JWK, myPublicKey: JWK, pairwiseKey: Uint8Array | null }>
 const pairwiseKeyState = new Map();
@@ -323,20 +327,59 @@ async function _advanceGroupSendChain(conversationId) {
     if (!myKey) throw new Error(`No sender key for group ${conversationId}`);
     const { nextChainKey, messageKey } = await _hkdfChainStep(myKey.senderKey);
     groupSendChains.set(conversationId, { sendChainKey: nextChainKey, sendCounter: 1 });
+    // Persist so the counter survives page reload
+    saveKey(`group-chain-${conversationId}`, { sendChainKey: nextChainKey, sendCounter: 1 });
     return { messageKey, counter: 0 };
   }
   const { nextChainKey, messageKey } = await _hkdfChainStep(chain.sendChainKey);
   const counter = chain.sendCounter;
   chain.sendChainKey = nextChainKey;
   chain.sendCounter = counter + 1;
+  // Persist updated chain state
+  saveKey(`group-chain-${conversationId}`, { sendChainKey: nextChainKey, sendCounter: counter + 1 });
   return { messageKey, counter };
 }
 
-async function _deriveGroupMessageKeyAtCounter(senderKey, counter) {
+async function _deriveGroupMessageKeyAtCounter(senderKey, counter, conversationId, senderUserId) {
+  // Use per-sender receive chain cache to avoid O(counter) HKDF steps on every call.
+  // Messages typically arrive in order, so each call only advances the chain by 1 step.
+  if (conversationId && senderUserId) {
+    if (!groupReceiveChains.has(conversationId)) groupReceiveChains.set(conversationId, new Map());
+    const convChains = groupReceiveChains.get(conversationId);
+    const cached = convChains.get(senderUserId);
+
+    if (cached && cached.counter <= counter) {
+      // Advance from cached position — O(counter − cached.counter) instead of O(counter)
+      let chainKey = cached.chainKey;
+      for (let i = cached.counter; i < counter; i++) {
+        const step = await _hkdfChainStep(chainKey);
+        chainKey = step.nextChainKey;
+      }
+      const step = await _hkdfChainStep(chainKey);
+      convChains.set(senderUserId, { chainKey: step.nextChainKey, counter: counter + 1 });
+      return step.messageKey;
+    }
+  }
+
+  // Full derivation from scratch (first call or counter is behind cached position)
   let chainKey = senderKey;
   for (let i = 0; i <= counter; i++) {
     const step = await _hkdfChainStep(chainKey);
-    if (i === counter) return step.messageKey;
+    if (i === counter) {
+      // Seed the cache if this counter is ahead of what we currently have
+      if (conversationId && senderUserId) {
+        const convChains = groupReceiveChains.get(conversationId);
+        const existing = convChains?.get(senderUserId);
+        if (!existing || existing.counter <= counter) {
+          if (!groupReceiveChains.has(conversationId)) groupReceiveChains.set(conversationId, new Map());
+          groupReceiveChains.get(conversationId).set(senderUserId, {
+            chainKey: step.nextChainKey,
+            counter: counter + 1,
+          });
+        }
+      }
+      return step.messageKey;
+    }
     chainKey = step.nextChainKey;
   }
   throw new Error('Failed to derive group message key');
@@ -442,33 +485,43 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
     console.log('[groupCrypto] Generated new sender key for', conversationId.slice(0, 8));
   }
 
-  // 2. For each other participant, encrypt my sender key with a derived wrapping key
-  const otherIds = participantIds.filter((id) => id !== myUserId);
-  const keyCopies = [];
-
-  for (const peerId of otherIds) {
-    try {
-      const wrapKey = await _ensurePairwiseKey(conversationId, myUserId, peerId);
-      if (!wrapKey) {
-        // Pairwise ECDH not yet complete — peer hasn't published their key yet.
-        // They'll get our sender key when the handshake completes.
-        console.log('[groupCrypto] Pairwise handshake pending with', peerId.slice(0, 8), '— skipping sender key wrap');
-        continue;
+  // Restore send chain state from IndexedDB so the counter doesn't reset on page reload
+  if (!groupSendChains.has(conversationId)) {
+    const storedChain = await loadKey(`group-chain-${conversationId}`);
+    if (storedChain) {
+      if (storedChain.sendChainKey && !(storedChain.sendChainKey instanceof Uint8Array)) {
+        storedChain.sendChainKey = new Uint8Array(storedChain.sendChainKey);
       }
-      const { ciphertext, iv } = await engine.encryptSenderKey(wrapKey, myKey.senderKey);
-
-      keyCopies.push({
-        recipientUserId: peerId,
-        encryptedSenderKey: ciphertext,
-        iv,
-        keyGeneration: myKey.keyGeneration,
-      });
-    } catch (err) {
-      console.warn('[groupCrypto] Failed to wrap sender key for', peerId.slice(0, 8), ':', err.message);
+      groupSendChains.set(conversationId, storedChain);
+      console.log('[groupCrypto] Restored send chain, counter =', storedChain.sendCounter);
     }
   }
 
-  // 3. POST encrypted copies to server
+  // 2. For each other participant, encrypt my sender key — run all pairwise setups in parallel
+  const otherIds = participantIds.filter((id) => id !== myUserId);
+
+  const pairwiseResults = await Promise.allSettled(
+    otherIds.map(async (peerId) => {
+      try {
+        const wrapKey = await _ensurePairwiseKey(conversationId, myUserId, peerId);
+        if (!wrapKey) {
+          console.log('[groupCrypto] Pairwise handshake pending with', peerId.slice(0, 8), '— skipping sender key wrap');
+          return null;
+        }
+        const { ciphertext, iv } = await engine.encryptSenderKey(wrapKey, myKey.senderKey);
+        return { recipientUserId: peerId, encryptedSenderKey: ciphertext, iv, keyGeneration: myKey.keyGeneration };
+      } catch (err) {
+        console.warn('[groupCrypto] Failed to wrap sender key for', peerId.slice(0, 8), ':', err.message);
+        return null;
+      }
+    })
+  );
+
+  const keyCopies = pairwiseResults
+    .filter((r) => r.status === 'fulfilled' && r.value !== null)
+    .map((r) => r.value);
+
+  // 3. POST encrypted copies to server — only notify peers after keys are actually stored
   if (keyCopies.length > 0) {
     try {
       await storeSenderKeys(conversationId, keyCopies);
@@ -476,15 +529,21 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
     } catch (err) {
       console.error('[groupCrypto] Failed to distribute sender keys:', err.message);
     }
+    if (emitSenderKeyDistributed) {
+      emitSenderKeyDistributed(conversationId, myKey.keyGeneration);
+    }
   }
 
-  // 4. Notify via socket
-  if (emitSenderKeyDistributed) {
-    emitSenderKeyDistributed(conversationId, myKey.keyGeneration);
-  }
-
-  // 5. Fetch and decrypt sender keys from other participants
+  // 4. Fetch and decrypt sender keys from other participants
   await _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps);
+
+  // Fire key-ready event so the UI can immediately retry any stubs that failed before keys arrived
+  const peerMap = peerSenderKeys.get(conversationId);
+  if (peerMap && peerMap.size > 0) {
+    window.dispatchEvent(new CustomEvent('blink-group-key-ready', {
+      detail: { conversationId },
+    }));
+  }
 }
 
 /**
@@ -525,6 +584,9 @@ async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps
         const senderKey = await engine.decryptSenderKey(wrapKey, encryptedSenderKey, iv);
         peerMap.set(senderUserId, { senderKey, keyGeneration });
         await saveKey(`group-pk-${conversationId}-${senderUserId}`, { senderKey, keyGeneration });
+        // Invalidate receive chain cache — old chain positions are invalid with the new key
+        const convChains = groupReceiveChains.get(conversationId);
+        if (convChains) convChains.delete(senderUserId);
         console.log('[groupCrypto] Decrypted sender key from', senderUserId.slice(0, 8),
           'gen=', keyGeneration);
       } catch (err) {
@@ -570,7 +632,21 @@ export async function handleSenderKeyDistributed(conversationId, senderUserId, d
  */
 export async function handleSenderKeyRequest(conversationId, requestingUserId, deps) {
   const { emitSenderKeyDistributed } = deps || {};
-  const myKey = mySenderKeys.get(conversationId);
+  let myKey = mySenderKeys.get(conversationId);
+
+  // If not in memory (e.g. user reconnected without opening this conversation), try IndexedDB
+  if (!myKey) {
+    const stored = await loadKey(`group-sk-${conversationId}`);
+    if (stored) {
+      if (stored.senderKey && !(stored.senderKey instanceof Uint8Array)) {
+        stored.senderKey = new Uint8Array(stored.senderKey);
+      }
+      myKey = stored;
+      mySenderKeys.set(conversationId, myKey);
+      console.log('[groupCrypto] Restored sender key from IndexedDB to handle re-distribute request');
+    }
+  }
+
   if (!myKey) {
     console.warn('[groupCrypto] Sender key request but we have no key for', conversationId.slice(0, 8));
     return;
@@ -651,7 +727,7 @@ export async function decryptGroupMessage(conversationId, senderUserId, encrypte
   const { ciphertext, iv, version, chainIdx } = encryptedPayload;
 
   if (typeof chainIdx === 'number') {
-    const messageKey = await _deriveGroupMessageKeyAtCounter(senderKey, chainIdx);
+    const messageKey = await _deriveGroupMessageKeyAtCounter(senderKey, chainIdx, conversationId, senderUserId);
     return engine.decryptMessage(messageKey, { ciphertext, iv, version });
   }
 
@@ -702,6 +778,7 @@ export async function rotateMySenderKey(conversationId, myUserId, remainingParti
 
   // Reset send chain (new key = new chain)
   groupSendChains.delete(conversationId);
+  await deleteKey(`group-chain-${conversationId}`);
 
   // Delete old keys on server
   try {
@@ -761,8 +838,10 @@ export async function clearGroupKeys(conversationId) {
   groupSendChains.delete(conversationId);
   groupConversations.delete(conversationId);
   pairwiseKeyState.delete(conversationId);
+  groupReceiveChains.delete(conversationId);
 
   await deleteKey(`group-sk-${conversationId}`);
+  await deleteKey(`group-chain-${conversationId}`);
 
   // Clean up peer keys + pairwise keys from IndexedDB (best-effort)
   try {
@@ -776,8 +855,9 @@ export async function clearGroupKeys(conversationId) {
     });
     const peerPrefix = `group-pk-${conversationId}-`;
     const pairPrefix = `group-pair-${conversationId}:pair:`;
+    const chainKey = `group-chain-${conversationId}`;
     for (const k of allKeys) {
-      if (typeof k === 'string' && (k.startsWith(peerPrefix) || k.startsWith(pairPrefix))) {
+      if (typeof k === 'string' && (k.startsWith(peerPrefix) || k.startsWith(pairPrefix) || k === chainKey)) {
         await deleteKey(k);
       }
     }
@@ -795,6 +875,7 @@ export async function clearAllGroupKeys() {
   groupSendChains.clear();
   groupConversations.clear();
   pairwiseKeyState.clear();
+  groupReceiveChains.clear();
 
   // Clean up IndexedDB
   try {
@@ -807,7 +888,10 @@ export async function clearAllGroupKeys() {
       request.onerror = () => reject(request.error);
     });
     for (const k of allKeys) {
-      if (typeof k === 'string' && (k.startsWith('group-sk-') || k.startsWith('group-pk-') || k.startsWith('group-pair-'))) {
+      if (typeof k === 'string' && (
+        k.startsWith('group-sk-') || k.startsWith('group-pk-') ||
+        k.startsWith('group-pair-') || k.startsWith('group-chain-')
+      )) {
         await deleteKey(k);
       }
     }

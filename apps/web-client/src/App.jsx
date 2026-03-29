@@ -294,6 +294,25 @@ function MessengerView({ user, logout, onShowHelp }) {
     };
   }, [user.id]);
 
+  // On socket reconnect: re-join the active conversation room and re-run group key setup
+  // so any members who joined while we were disconnected get our sender key and vice versa.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const onConnect = () => {
+      if (!activeConversation) return;
+      joinConversation(activeConversation.id);
+      if (activeConversation.type === 'group_chat') {
+        const pIds = (activeConversation.participant_ids || '').split(',').filter(Boolean);
+        setupGroupKeys(activeConversation.id, user.id, pIds, { emitSenderKeyDistributed }).catch(() => {});
+      }
+    };
+
+    socket.on('connect', onConnect);
+    return () => socket.off('connect', onConnect);
+  }, [activeConversation, user.id]);
+
   // Global message listener — catches messages for NON-ACTIVE conversations so
   // they are decrypted and appended to the message cache + unread count.
   useEffect(() => {
@@ -427,18 +446,27 @@ function MessengerView({ user, logout, onShowHelp }) {
     // When a new user (or guest) joins a room we're in, refresh participant data
     // so display names resolve correctly instead of showing UUIDs.
     const handleUserJoined = async ({ conversationId }) => {
-      if (activeConversation?.id !== conversationId) return;
       try {
         const conversations = await getConversations();
         const fresh = conversations.find((c) => c.id === conversationId);
         if (fresh) {
-          const names = (fresh.participant_usernames || '').split(',').filter((n) => n !== user.username);
-          setActiveConversation((prev) => prev ? {
-            ...prev,
-            participant_ids: fresh.participant_ids,
-            participant_usernames: fresh.participant_usernames,
-            displayName: fresh.name || names.join(', ') || 'Conversation',
-          } : prev);
+          // Re-run group key setup so existing members establish keys with the new joiner
+          if (fresh.type === 'group_chat') {
+            const pIds = (fresh.participant_ids || '').split(',').filter(Boolean);
+            setupGroupKeys(fresh.id, user.id, pIds, { emitSenderKeyDistributed }).catch((err) => {
+              console.warn('[group] Re-setup after user_joined failed:', err.message);
+            });
+          }
+          // Update the active conversation's participant list for the UI
+          if (activeConversation?.id === conversationId) {
+            const names = (fresh.participant_usernames || '').split(',').filter((n) => n !== user.username);
+            setActiveConversation((prev) => prev ? {
+              ...prev,
+              participant_ids: fresh.participant_ids,
+              participant_usernames: fresh.participant_usernames,
+              displayName: fresh.name || names.join(', ') || 'Conversation',
+            } : prev);
+          }
         }
       } catch { /* ignore */ }
       conversationListRef.current?.refresh();

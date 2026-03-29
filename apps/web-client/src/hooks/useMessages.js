@@ -127,6 +127,15 @@ export function useMessages(conversationId, myUserId) {
     pendingQueue.current = [];
     failedDecryptCache.current.clear();
 
+    // Seed retry cache with any undecryptable stubs from the persisted cache so they
+    // are retried immediately if group keys are already available, or on the next key-ready event.
+    if (cached) {
+      const stubs = cached.messages.filter((m) => m._undecryptable);
+      for (const m of stubs) {
+        failedDecryptCache.current.set(m.id, { msg: m, senderId: m.senderId });
+      }
+    }
+
     // Set initial keyReady state
     setKeyReady(hasConversationKey(conversationId));
 
