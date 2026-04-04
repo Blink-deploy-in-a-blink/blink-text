@@ -247,18 +247,90 @@ async function _ensurePairwiseKey(conversationId, myUserId, peerId) {
  *       because the pairwise handshake wasn't complete yet)
  */
 export async function handleGroupPairwiseExchange(conversationId, fromUserId, myUserId, deps) {
-  const pairwiseKey = await _ensurePairwiseKey(conversationId, myUserId, fromUserId);
-  if (pairwiseKey) {
-    // (a) Fetch sender keys from this peer
-    await _fetchAndDecryptPeerKeys(conversationId, myUserId, [fromUserId], deps);
+  // group_pairwise_exchange means the peer has published a (possibly new) ECDH public key.
+  // We must always re-derive the pairwise key using the peer's CURRENT published key from
+  // the server, NOT the cached value — the peer may have switched browsers and their key
+  // may have changed, making any cached pairwise key stale and wrong.
+  //
+  // IMPORTANT: we do NOT call _ensurePairwiseKey here, because _ensurePairwiseKey emits
+  // group_pairwise_exchange whenever it falls through to step 3 (fresh derivation). If we
+  // used it, the peer would receive our emission, invalidate their cache, re-emit back to
+  // us, and we would be stuck in an infinite echo loop. Instead we:
+  //   1. Reuse our own existing ECDH keypair (never regenerate unnecessarily)
+  //   2. Fetch the peer's CURRENT published key directly from the server
+  //   3. Derive the pairwise key and update memory + IDB
+  //   4. Never re-emit group_pairwise_exchange (we are responding, not initiating)
 
-    // (b) Distribute our sender key to this peer now that we have a pairwise key
-    await _distributeMySenderKeyToPeer(conversationId, myUserId, fromUserId, pairwiseKey, deps);
+  const pairId = _pairwiseId(conversationId, myUserId, fromUserId);
+  const idbKey = `group-pair-${pairId}`;
 
-    window.dispatchEvent(new CustomEvent('blink-group-key-ready', {
-      detail: { conversationId, senderUserId: fromUserId },
-    }));
+  // Step 1 — obtain our own ECDH keypair for this pair.
+  // Preference order: in-memory → IndexedDB → generate a brand-new one (only if truly absent).
+  let myPrivateKey, myPublicKey;
+  const convMap = pairwiseKeyState.get(conversationId);
+  const memoryCached = convMap?.get(fromUserId);
+  const idbStored = await loadKey(idbKey);
+
+  if (memoryCached?.myPrivateKey) {
+    myPrivateKey = memoryCached.myPrivateKey;
+    myPublicKey = memoryCached.myPublicKey;
+  } else if (idbStored?.myPrivateKey) {
+    myPrivateKey = idbStored.myPrivateKey;
+    myPublicKey = idbStored.myPublicKey;
+  } else {
+    // Truly first contact — generate a keypair and publish it so the peer can complete
+    // their side. We do NOT re-emit group_pairwise_exchange; the peer already knows our
+    // key was missing and will fetch it when they run _ensurePairwiseKey on their side.
+    const kp = await engine.generateECDHKey();
+    myPrivateKey = kp.privateKey;
+    myPublicKey = kp.publicKey;
+    try {
+      await publishPairwiseKey(conversationId, fromUserId, myPublicKey);
+    } catch (err) {
+      console.warn('[groupCrypto] Failed to publish pairwise key for', fromUserId.slice(0, 8), ':', err.message);
+    }
   }
+
+  // Step 2 — fetch the peer's CURRENT published public key from the server.
+  let peerPublicKey = null;
+  try {
+    const response = await getPairwiseKeys(conversationId);
+    const keys = response.pairwiseKeys || [];
+    const peerEntry = keys.find((k) => k.userId === fromUserId && k.peerUserId === myUserId);
+    if (peerEntry) peerPublicKey = peerEntry.ephemeralPublicKey;
+  } catch (err) {
+    console.warn('[groupCrypto] Failed to fetch peer pairwise key for', fromUserId.slice(0, 8), ':', err.message);
+  }
+
+  if (!peerPublicKey) {
+    console.log('[groupCrypto] Peer has not yet published their pairwise key —', fromUserId.slice(0, 8), '— will complete when their key arrives');
+    return;
+  }
+
+  // Step 3 — derive fresh pairwise key using the peer's CURRENT public key.
+  let pairwiseKey;
+  try {
+    pairwiseKey = await engine.deriveConversationKeyFromExchange(myPrivateKey, peerPublicKey, pairId);
+  } catch (err) {
+    console.warn('[groupCrypto] Failed to derive pairwise key with', fromUserId.slice(0, 8), ':', err.message);
+    return;
+  }
+
+  // Step 4 — persist the fresh pairwise key to memory and IndexedDB.
+  if (!pairwiseKeyState.has(conversationId)) pairwiseKeyState.set(conversationId, new Map());
+  pairwiseKeyState.get(conversationId).set(fromUserId, { myPrivateKey, myPublicKey, pairwiseKey });
+  await saveKey(idbKey, { myPrivateKey, myPublicKey, pairwiseKey });
+  console.log('[groupCrypto] Re-derived pairwise key with', fromUserId.slice(0, 8), 'from pairwise exchange event');
+
+  // Step 5 — exchange sender keys now that we have a valid pairwise key.
+  // (a) Fetch and decrypt any sender keys this peer has stored for us.
+  await _fetchAndDecryptPeerKeys(conversationId, myUserId, [fromUserId], deps);
+  // (b) Wrap and store our sender key for this peer.
+  await _distributeMySenderKeyToPeer(conversationId, myUserId, fromUserId, pairwiseKey, deps);
+
+  window.dispatchEvent(new CustomEvent('blink-group-key-ready', {
+    detail: { conversationId, senderUserId: fromUserId },
+  }));
 }
 
 /**
@@ -537,13 +609,13 @@ async function _doSetupGroupKeys(conversationId, myUserId, participantIds, deps)
   // 4. Fetch and decrypt sender keys from other participants
   await _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps);
 
-  // Fire key-ready event so the UI can immediately retry any stubs that failed before keys arrived
-  const peerMap = peerSenderKeys.get(conversationId);
-  if (peerMap && peerMap.size > 0) {
-    window.dispatchEvent(new CustomEvent('blink-group-key-ready', {
-      detail: { conversationId },
-    }));
-  }
+  // Fire key-ready event unconditionally so the UI can retry stubs that failed before keys
+  // arrived. retryFailedDecryptions is a no-op when peerSenderKeys is still empty, so
+  // dispatching here even when no keys were loaded is safe and enables future retries as
+  // keys arrive via subsequent sender_key_distributed / group_pairwise_exchange events.
+  window.dispatchEvent(new CustomEvent('blink-group-key-ready', {
+    detail: { conversationId },
+  }));
 }
 
 /**
@@ -579,6 +651,19 @@ async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps
         const wrapKey = await _ensurePairwiseKey(conversationId, myUserId, senderUserId);
         if (!wrapKey) {
           console.log('[groupCrypto] Pairwise handshake pending with', senderUserId.slice(0, 8), '— cannot decrypt sender key yet');
+          // Fall back to IDB-cached sender key so historical messages remain readable
+          // while the pairwise handshake completes in the background.
+          try {
+            const idbFallback = await loadKey(`group-pk-${conversationId}-${senderUserId}`);
+            if (idbFallback?.senderKey) {
+              const sk = idbFallback.senderKey instanceof Uint8Array
+                ? idbFallback.senderKey : new Uint8Array(idbFallback.senderKey);
+              peerMap.set(senderUserId, { senderKey: sk, keyGeneration: idbFallback.keyGeneration });
+              console.log('[groupCrypto] Using IDB-cached sender key for', senderUserId.slice(0, 8), '(pairwise pending)');
+            }
+          } catch {
+            // IDB read failed — no fallback available, continue without key
+          }
           continue;
         }
         const senderKey = await engine.decryptSenderKey(wrapKey, encryptedSenderKey, iv);
@@ -591,6 +676,19 @@ async function _fetchAndDecryptPeerKeys(conversationId, myUserId, otherIds, deps
           'gen=', keyGeneration);
       } catch (err) {
         console.warn('[groupCrypto] Failed to decrypt sender key from', senderUserId.slice(0, 8), ':', err.message);
+        // Fall back to IDB-cached sender key — it was written after a previous successful
+        // decryption so it is valid for all messages sent with that key generation.
+        try {
+          const idbFallback = await loadKey(`group-pk-${conversationId}-${senderUserId}`);
+          if (idbFallback?.senderKey) {
+            const sk = idbFallback.senderKey instanceof Uint8Array
+              ? idbFallback.senderKey : new Uint8Array(idbFallback.senderKey);
+            peerMap.set(senderUserId, { senderKey: sk, keyGeneration: idbFallback.keyGeneration });
+            console.log('[groupCrypto] Using IDB-cached sender key for', senderUserId.slice(0, 8), '(server decrypt failed)');
+          }
+        } catch {
+          // IDB read also failed — no fallback available
+        }
       }
     }
 
