@@ -950,7 +950,12 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                     : s.bubble(mine)
                   }>
                     {msg._undecryptable || msg.plaintext === '[unable to decrypt]'
-                      ? '🔒 Encrypted message — key not yet available'
+                      ? keyReady
+                        ? '🔒 Encrypted message — key not available on this device'
+                        : <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.35rem', width: '100%' }}>
+                            <span style={{ display: 'inline-block', width: '70%', height: '0.75em', borderRadius: '3px', background: 'var(--border-light)', animation: 'pulse 1.5s ease-in-out infinite' }} />
+                            <span style={{ display: 'inline-block', width: '45%', height: '0.75em', borderRadius: '3px', background: 'var(--border-light)', animation: 'pulse 1.5s ease-in-out infinite', animationDelay: '0.2s' }} />
+                          </span>
                       : linkifyText(msg.plaintext)}
                     {msg.edited && <span style={s.edited}>(edited)</span>}
                     {msg._failed && <span style={{ ...s.edited, color: 'var(--danger-muted)' }}> (failed)</span>}
