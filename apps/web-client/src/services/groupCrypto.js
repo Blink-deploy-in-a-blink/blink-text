@@ -243,6 +243,22 @@ async function _ensurePairwiseKey(conversationId, myUserId, peerId) {
  *       because the pairwise handshake wasn't complete yet)
  */
 export async function handleGroupPairwiseExchange(conversationId, fromUserId, myUserId, deps) {
+  // The peer published a NEW pairwise ECDH public key (e.g. they logged in from a new
+  // browser). Invalidate our cached pairwise key so _ensurePairwiseKey re-fetches their
+  // new public key and re-derives the wrapping key instead of returning a stale value.
+  if (pairwiseKeyState.has(conversationId)) {
+    pairwiseKeyState.get(conversationId).delete(fromUserId);
+  }
+  const pairId = _pairwiseId(conversationId, myUserId, fromUserId);
+  const idbKey = `group-pair-${pairId}`;
+  const stored = await loadKey(idbKey);
+  if (stored) {
+    // Preserve our own keypair (we haven't changed) but clear the derived pairwise key
+    // so _ensurePairwiseKey falls through to re-fetch the peer's new public key and
+    // re-derive, rather than returning the now-invalid old wrapping key.
+    await saveKey(idbKey, { myPrivateKey: stored.myPrivateKey, myPublicKey: stored.myPublicKey, pairwiseKey: null });
+  }
+
   const pairwiseKey = await _ensurePairwiseKey(conversationId, myUserId, fromUserId);
   if (pairwiseKey) {
     // (a) Fetch sender keys from this peer

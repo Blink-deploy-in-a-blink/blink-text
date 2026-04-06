@@ -3,7 +3,7 @@ import { useAuth } from './hooks/useAuth.js';
 import { useMessages } from './hooks/useMessages.js';
 import { useBackgroundPreloader } from './hooks/useBackgroundPreloader.js';
 import { getSocket, joinConversation } from './services/socket.js';
-import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey } from './services/cryptoService.js';
+import { completeKeyExchangeFromSocket, setupConversationKey, handleKeyConfirm, decryptConversationMessage, hasConversationKey, restoreConversationKey } from './services/cryptoService.js';
 import { appendCachedMessage, incrementUnread, clearUnread, getUnreadCount, getTotalUnread, onUnreadChange } from './services/messageCache.js';
 import { getConversations } from './services/api.js';
 import { verifyAdmin } from './services/api.js';
@@ -319,13 +319,26 @@ function MessengerView({ user, logout, onShowHelp }) {
         } catch { /* notification not supported in this context */ }
       }
 
-      if (!hasConversationKey(msg.conversationId)) return;
+      // Try to decrypt even if key isn't in memory — it might be restorable from IndexedDB
+      if (!hasConversationKey(msg.conversationId)) {
+        try {
+          await restoreConversationKey(msg.conversationId);
+        } catch (err) {
+          console.debug('[global] Key restore failed for', msg.conversationId, err.message);
+        }
+      }
+
+      if (!hasConversationKey(msg.conversationId)) {
+        // No key available — cache as stub (Fix 4)
+        appendCachedMessage(msg.conversationId, { ...msg, plaintext: null, _undecryptable: true });
+        return;
+      }
       try {
         const plaintext = await decryptConversationMessage(msg.conversationId, msg.payload, msg.senderId);
         appendCachedMessage(msg.conversationId, { ...msg, plaintext });
       } catch (err) {
         console.warn('[global] Failed to decrypt message for', msg.conversationId, err.message);
-        appendCachedMessage(msg.conversationId, { ...msg, plaintext: '[unable to decrypt]' });
+        appendCachedMessage(msg.conversationId, { ...msg, plaintext: null, _undecryptable: true });
       }
     };
 

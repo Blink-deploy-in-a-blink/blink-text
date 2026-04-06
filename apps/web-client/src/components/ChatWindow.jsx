@@ -943,14 +943,19 @@ export default function ChatWindow({ conversation, messages, myUserId, loading, 
                 {(msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'voice') && msg.mediaId ? (
                   <MediaBubble msg={msg} mine={mine} conversationId={conversation.id} onPreview={setPreviewMedia} />
                 ) : (
-                  <div style={msg.plaintext === '[unable to decrypt]'
+                  <div style={msg._undecryptable || msg.plaintext === '[unable to decrypt]'
                     ? { ...s.bubble(mine), background: 'var(--bg-elevated)', border: '1px dashed var(--border-light)', fontStyle: 'italic', color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }
                     : msg._queued
                     ? { ...s.bubble(mine), opacity: 0.6 }
                     : s.bubble(mine)
                   }>
-                    {msg.plaintext === '[unable to decrypt]'
-                      ? '🔒 This message can\'t be decrypted — encryption keys have changed'
+                    {msg._undecryptable || msg.plaintext === '[unable to decrypt]'
+                      ? keyReady
+                        ? '🔒 Encrypted message — key not available on this device'
+                        : <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.35rem', width: '100%' }}>
+                            <span style={{ display: 'inline-block', width: '70%', height: '0.75em', borderRadius: '3px', background: 'var(--border-light)', animation: 'pulse 1.5s ease-in-out infinite' }} />
+                            <span style={{ display: 'inline-block', width: '45%', height: '0.75em', borderRadius: '3px', background: 'var(--border-light)', animation: 'pulse 1.5s ease-in-out infinite', animationDelay: '0.2s' }} />
+                          </span>
                       : linkifyText(msg.plaintext)}
                     {msg.edited && <span style={s.edited}>(edited)</span>}
                     {msg._failed && <span style={{ ...s.edited, color: 'var(--danger-muted)' }}> (failed)</span>}

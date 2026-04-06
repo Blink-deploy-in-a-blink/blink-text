@@ -8,6 +8,7 @@ import {
   encryptMediaForConversation,
   decryptConversationMessage,
   hasConversationKey,
+  restoreConversationKey,
 } from '../services/cryptoService.js';
 import {
   isGroupConversation,
@@ -35,13 +36,52 @@ export function useMessages(conversationId, myUserId) {
   // In-memory queue of messages waiting for key exchange to complete.
   // Each entry: { type: 'text'|'media', plaintext?, file?, messageType?, replyToId?, optimisticMsg }
   const pendingQueue = useRef([]);
+  // Cache of messages that failed decryption — keyed by messageId.
+  // Used for retry when keys arrive later (Fix 3).
+  // Each entry: { msg (full raw message with payload), senderId }
+  const failedDecryptCache = useRef(new Map());
 
   useEffect(() => {
     isMounted.current = true;
     return () => { isMounted.current = false; };
   }, []);
 
-  // Decrypt a batch of raw messages
+  // Retry decrypting previously failed messages when keys become available.
+  const retryFailedDecryptions = useCallback(async () => {
+    if (failedDecryptCache.current.size === 0) return;
+    const retried = [];
+    for (const [msgId, cached] of failedDecryptCache.current) {
+      try {
+        const plaintext = await decryptConversationMessage(conversationId, cached.msg.payload, cached.senderId);
+        retried.push({ msgId, plaintext });
+      } catch (err) {
+        // Still can't decrypt — leave in cache for next retry
+        console.debug('[useMessages] Retry decrypt still failed for', msgId, err.message);
+      }
+    }
+    if (retried.length === 0) return;
+
+    // Remove successfully decrypted messages from the cache
+    for (const { msgId } of retried) {
+      failedDecryptCache.current.delete(msgId);
+    }
+
+    // Update UI: replace stub messages with decrypted content
+    if (isMounted.current) {
+      setMessages((prev) => prev.map((m) => {
+        const match = retried.find((r) => r.msgId === m.id);
+        if (match) {
+          const updated = { ...m, plaintext: match.plaintext, _undecryptable: false };
+          updateCachedMessage(conversationId, m.id, () => updated);
+          return updated;
+        }
+        return m;
+      }));
+    }
+    console.log('[useMessages] Retried and decrypted', retried.length, 'previously failed messages');
+  }, [conversationId]);
+
+  // Decrypt a batch of raw messages — shows stubs for undecryptable ones (Fix 4)
   const decryptBatch = useCallback(async (rawMessages) => {
     return Promise.all(
       rawMessages.map(async (msg) => {
@@ -50,7 +90,10 @@ export function useMessages(conversationId, myUserId) {
           return { ...msg, plaintext };
         } catch (err) {
           console.warn('[useMessages] Failed to decrypt message:', msg.id, err);
-          return { ...msg, plaintext: '[unable to decrypt]' };
+          // Cache the failed message for later retry (Fix 3)
+          failedDecryptCache.current.set(msg.id, { msg, senderId: msg.senderId });
+          // Return a stub with metadata preserved (Fix 4)
+          return { ...msg, plaintext: null, _undecryptable: true };
         }
       })
     );
@@ -80,8 +123,9 @@ export function useMessages(conversationId, myUserId) {
       setHasMore(false);
     }
 
-    // Reset queue for the new conversation
+    // Reset queue and failed decryption cache for the new conversation
     pendingQueue.current = [];
+    failedDecryptCache.current.clear();
 
     // Set initial keyReady state
     setKeyReady(hasConversationKey(conversationId));
@@ -100,18 +144,14 @@ export function useMessages(conversationId, myUserId) {
           const groupReady = hasGroupKeys(conversationId);
           if (isMounted.current && !cancelled) setKeyReady(groupReady || true); // allow loading messages even if keys pending
         } else {
-          // DM conversations: set up ECDH key exchange
+          // DM conversations: try restoring key from IndexedDB first, then ECDH exchange
           await setupConversationKey(conversationId, myUserId);
 
           // Update keyReady state
           const keyAvailable = hasConversationKey(conversationId);
           if (isMounted.current && !cancelled) setKeyReady(keyAvailable);
 
-          // If we still don't have a key (peer hasn't published yet), show cached or empty
-          if (!keyAvailable) {
-            if (isMounted.current && !cancelled) setLoading(false);
-            return;
-          }
+          // Even if no key, still load messages — show stubs (Fix 4)
         }
 
         const { messages: rawMessages, hasMore: more } = await getMessages(conversationId, { limit: 50 });
@@ -142,7 +182,7 @@ export function useMessages(conversationId, myUserId) {
   }, [conversationId, myUserId, decryptBatch]);
 
   // Listen for key-ready events (fired by cryptoService when key exchange completes).
-  // When the key arrives: mark keyReady, flush any queued messages, and fetch history.
+  // When the key arrives: mark keyReady, flush any queued messages, retry failed decryptions, and fetch history.
   useEffect(() => {
     if (!conversationId) return;
 
@@ -153,6 +193,9 @@ export function useMessages(conversationId, myUserId) {
 
       console.log('[useMessages] Key ready for', conversationId.slice(0, 8), '— flushing queue');
       setKeyReady(true);
+
+      // Retry previously failed decryptions now that we have a key (Fix 3)
+      await retryFailedDecryptions();
 
       // Flush queued messages
       const queue = [...pendingQueue.current];
@@ -192,7 +235,9 @@ export function useMessages(conversationId, myUserId) {
               const plaintext = await decryptConversationMessage(conversationId, msg.payload, msg.senderId);
               return { ...msg, plaintext };
             } catch {
-              return { ...msg, plaintext: '[unable to decrypt]' };
+              // Cache for retry (Fix 3), show stub (Fix 4)
+              failedDecryptCache.current.set(msg.id, { msg, senderId: msg.senderId });
+              return { ...msg, plaintext: null, _undecryptable: true };
             }
           })
         );
@@ -213,7 +258,7 @@ export function useMessages(conversationId, myUserId) {
 
     window.addEventListener('blink-key-ready', handleKeyReady);
     return () => window.removeEventListener('blink-key-ready', handleKeyReady);
-  }, [conversationId, myUserId]);
+  }, [conversationId, myUserId, retryFailedDecryptions]);
 
   // Load older messages (called when user scrolls to top)
   const loadMore = useCallback(async () => {
@@ -237,6 +282,19 @@ export function useMessages(conversationId, myUserId) {
       if (isMounted.current) setLoadingMore(false);
     }
   }, [conversationId, loadingMore, hasMore, messages, decryptBatch]);
+
+  // Listen for group key ready events to retry failed group message decryptions (Fix 3)
+  useEffect(() => {
+    if (!conversationId) return;
+    const handleGroupKeyReady = async (e) => {
+      if (e.detail?.conversationId !== conversationId) return;
+      if (!isMounted.current) return;
+      console.log('[useMessages] Group key ready — retrying failed decryptions');
+      await retryFailedDecryptions();
+    };
+    window.addEventListener('blink-group-key-ready', handleGroupKeyReady);
+    return () => window.removeEventListener('blink-group-key-ready', handleGroupKeyReady);
+  }, [conversationId, retryFailedDecryptions]);
 
   // Socket event listeners — key_exchange is now handled globally in App.jsx (Issue 2.2)
   useEffect(() => {
@@ -265,12 +323,15 @@ export function useMessages(conversationId, myUserId) {
         }
       } catch (err) {
         console.warn('[useMessages] Failed to decrypt incoming message:', msg.id, err);
-        const failedMsg = { ...msg, plaintext: '[unable to decrypt]' };
-        appendCachedMessage(conversationId, failedMsg);
+        // Cache for retry when keys arrive (Fix 3)
+        failedDecryptCache.current.set(msg.id, { msg, senderId: msg.senderId });
+        // Show stub with metadata (Fix 4)
+        const stubMsg = { ...msg, plaintext: null, _undecryptable: true };
+        appendCachedMessage(conversationId, stubMsg);
         if (isMounted.current) {
           setMessages((prev) => {
-            if (prev.some((m) => m.id === failedMsg.id)) return prev;
-            return [...prev, failedMsg];
+            if (prev.some((m) => m.id === stubMsg.id)) return prev;
+            return [...prev, stubMsg];
           });
         }
       }
